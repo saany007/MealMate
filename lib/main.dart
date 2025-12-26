@@ -3,6 +3,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'firebase_options.dart';
+
+// Screens
 import 'screens/splash_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
@@ -12,8 +14,20 @@ import 'screens/create_system_screen.dart';
 import 'screens/join_system_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/meal_calendar_screen.dart';
+import 'screens/grocery_list_screen.dart';
+import 'screens/add_grocery_item_screen.dart';
+import 'screens/attendance_screen.dart';
+import 'screens/attendance_history_screen.dart';
+import 'screens/expense_screen.dart';
+import 'screens/add_expense_screen.dart';
+import 'screens/expense_summary_screen.dart';
+
+// Services
 import 'services/auth_service.dart';
 import 'services/meal_system_service.dart';
+import 'services/grocery_service.dart';
+import 'services/attendance_service.dart';
+import 'services/expense_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,6 +49,9 @@ class MealMateApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => AuthService()),
         ChangeNotifierProvider(create: (_) => MealSystemService()),
+        ChangeNotifierProvider(create: (_) => GroceryService()),
+        ChangeNotifierProvider(create: (_) => AttendanceService()),
+        ChangeNotifierProvider(create: (_) => ExpenseService()),
       ],
       child: MaterialApp(
         title: 'MealMate',
@@ -110,6 +127,13 @@ class MealMateApp extends StatelessWidget {
           '/join-system': (context) => const JoinSystemScreen(),
           '/dashboard': (context) => const DashboardScreen(),
           '/calendar': (context) => const MealCalendarScreen(),
+          '/grocery-list': (context) => const GroceryListScreen(),
+          '/add-grocery-item': (context) => const AddGroceryItemScreen(),
+          '/attendance': (context) => const AttendanceScreen(),
+          '/attendance-history': (context) => const AttendanceHistoryScreen(),
+          '/expenses': (context) => const ExpenseScreen(),
+          '/add-expense': (context) => const AddExpenseScreen(),
+          '/expense-summary': (context) => const ExpenseSummaryScreen(),
         },
       ),
     );
