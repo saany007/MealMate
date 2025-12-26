@@ -424,25 +424,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           icon: Icons.shopping_cart_outlined,
                           title: 'Grocery List',
                           color: Colors.orange,
-                          onTap: () {
-                            Fluttertoast.showToast(msg: "Grocery List coming soon!");
-                          },
+                          onTap: () => Navigator.pushNamed(context, '/grocery-list'),
                         ),
                         _FeatureCard(
                           icon: Icons.check_circle_outline,
                           title: 'Attendance',
                           color: Colors.purple,
-                          onTap: () {
-                            Fluttertoast.showToast(msg: "Attendance coming soon!");
-                          },
+                          onTap: () => Navigator.pushNamed(context, '/attendance'),
                         ),
                         _FeatureCard(
                           icon: Icons.attach_money,
                           title: 'Expenses',
                           color: Colors.red,
-                          onTap: () {
-                            Fluttertoast.showToast(msg: "Expenses coming soon!");
-                          },
+                          onTap: () => Navigator.pushNamed(context, '/expenses'),
                         ),
                       ],
                     ),
