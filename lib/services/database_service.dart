@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_model.dart';
 import '../models/meal_system_model.dart';
-import '../models/daily_meal_model.dart'; // <--- ADDED THIS IMPORT TO FIX ERRORS
+import '../models/daily_meal_model.dart';
 
 class DatabaseService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -9,6 +9,10 @@ class DatabaseService {
   // Collections
   String get usersCollection => 'users';
   String get mealSystemsCollection => 'mealSystems';
+  String get mealCalendarCollection => 'mealCalendar';
+  String get attendanceCollection => 'attendance';
+  String get groceryListsCollection => 'groceryLists';
+  String get expensesCollection => 'expenses';
 
   // ==================== USER OPERATIONS ====================
 
@@ -281,41 +285,7 @@ class DatabaseService {
     });
   }
 
-  // ==================== UTILITY METHODS ====================
-
-  // Batch update (for efficiency)
-  Future<void> batchUpdate(List<Map<String, dynamic>> updates) async {
-    try {
-      WriteBatch batch = _firestore.batch();
-
-      for (var update in updates) {
-        DocumentReference docRef = _firestore
-            .collection(update['collection'])
-            .doc(update['docId']);
-        batch.update(docRef, update['data']);
-      }
-
-      await batch.commit();
-    } catch (e) {
-      throw Exception('Failed to perform batch update: $e');
-    }
-  }
-
-  // Transaction update (for atomic operations)
-  Future<T> runTransaction<T>(
-    Future<T> Function(Transaction transaction) updateFunction,
-  ) async {
-    try {
-      return await _firestore.runTransaction(updateFunction);
-    } catch (e) {
-      throw Exception('Failed to run transaction: $e');
-    }
-  }
-
-
-  // ==================== CALENDAR OPERATIONS ====================
-
-  String get mealCalendarCollection => 'mealCalendar';
+  // ==================== MEAL CALENDAR OPERATIONS ====================
 
   // Stream meals for specific dates
   Stream<List<DailyMealModel>> streamWeeklyMeals(String systemId, List<String> dates) {
@@ -369,6 +339,287 @@ class DatabaseService {
       }, SetOptions(merge: true));
     } catch (e) {
       throw Exception('Failed to volunteer: $e');
+    }
+  }
+
+  // Update meal attendees count
+  Future<void> updateMealAttendees({
+    required String systemId,
+    required String date,
+    required String mealType,
+    required int count,
+  }) async {
+    try {
+      await _firestore.collection(mealCalendarCollection).doc(systemId).set({
+        date: {
+          mealType: {
+            'attendees': count,
+          },
+        }
+      }, SetOptions(merge: true));
+    } catch (e) {
+      throw Exception('Failed to update attendees: $e');
+    }
+  }
+
+  // ==================== GROCERY LIST OPERATIONS ====================
+
+  // Get active grocery list
+  Future<DocumentSnapshot?> getActiveGroceryList(String systemId) async {
+    try {
+      QuerySnapshot querySnapshot = await _firestore
+          .collection(groceryListsCollection)
+          .doc(systemId)
+          .collection('lists')
+          .where('status', isEqualTo: 'active')
+          .limit(1)
+          .get();
+
+      if (querySnapshot.docs.isNotEmpty) {
+        return querySnapshot.docs.first;
+      }
+      return null;
+    } catch (e) {
+      throw Exception('Failed to get active grocery list: $e');
+    }
+  }
+
+  // Create grocery list
+  Future<void> createGroceryList(String systemId, Map<String, dynamic> listData) async {
+    try {
+      await _firestore
+          .collection(groceryListsCollection)
+          .doc(systemId)
+          .collection('lists')
+          .doc(listData['listId'])
+          .set(listData);
+    } catch (e) {
+      throw Exception('Failed to create grocery list: $e');
+    }
+  }
+
+  // Update grocery list
+  Future<void> updateGroceryList(
+    String systemId,
+    String listId,
+    Map<String, dynamic> updates,
+  ) async {
+    try {
+      await _firestore
+          .collection(groceryListsCollection)
+          .doc(systemId)
+          .collection('lists')
+          .doc(listId)
+          .update(updates);
+    } catch (e) {
+      throw Exception('Failed to update grocery list: $e');
+    }
+  }
+
+  // ==================== ATTENDANCE OPERATIONS ====================
+
+  // Mark attendance
+  Future<void> markAttendance({
+    required String systemId,
+    required String date,
+    required String mealType,
+    required String userId,
+    required Map<String, dynamic> attendanceData,
+  }) async {
+    try {
+      await _firestore
+          .collection(attendanceCollection)
+          .doc(systemId)
+          .collection('daily')
+          .doc(date)
+          .set({
+        '$mealType.$userId': attendanceData,
+      }, SetOptions(merge: true));
+    } catch (e) {
+      throw Exception('Failed to mark attendance: $e');
+    }
+  }
+
+  // Get attendance for date
+  Future<DocumentSnapshot?> getAttendanceForDate(
+    String systemId,
+    String date,
+  ) async {
+    try {
+      DocumentSnapshot doc = await _firestore
+          .collection(attendanceCollection)
+          .doc(systemId)
+          .collection('daily')
+          .doc(date)
+          .get();
+
+      if (doc.exists) {
+        return doc;
+      }
+      return null;
+    } catch (e) {
+      throw Exception('Failed to get attendance: $e');
+    }
+  }
+
+  // Stream attendance for date
+  Stream<DocumentSnapshot> streamAttendanceForDate(
+    String systemId,
+    String date,
+  ) {
+    return _firestore
+        .collection(attendanceCollection)
+        .doc(systemId)
+        .collection('daily')
+        .doc(date)
+        .snapshots();
+  }
+
+  // Get attendance range
+  Future<QuerySnapshot> getAttendanceRange(
+    String systemId,
+    String startDate,
+    String endDate,
+  ) async {
+    try {
+      return await _firestore
+          .collection(attendanceCollection)
+          .doc(systemId)
+          .collection('daily')
+          .where(FieldPath.documentId, isGreaterThanOrEqualTo: startDate)
+          .where(FieldPath.documentId, isLessThanOrEqualTo: endDate)
+          .get();
+    } catch (e) {
+      throw Exception('Failed to get attendance range: $e');
+    }
+  }
+
+  // ==================== EXPENSE OPERATIONS ====================
+
+  // Add expense
+  Future<void> addExpense({
+    required String systemId,
+    required String expenseId,
+    required Map<String, dynamic> expenseData,
+  }) async {
+    try {
+      await _firestore
+          .collection(expensesCollection)
+          .doc(systemId)
+          .collection('records')
+          .doc(expenseId)
+          .set(expenseData);
+    } catch (e) {
+      throw Exception('Failed to add expense: $e');
+    }
+  }
+
+  // Get expenses for date range
+  Future<QuerySnapshot> getExpensesForRange(
+    String systemId, {
+    DateTime? startDate,
+    DateTime? endDate,
+    int limit = 50,
+  }) async {
+    try {
+      Query query = _firestore
+          .collection(expensesCollection)
+          .doc(systemId)
+          .collection('records')
+          .orderBy('date', descending: true);
+
+      if (startDate != null) {
+        query = query.where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate));
+      }
+
+      if (endDate != null) {
+        query = query.where('date', isLessThanOrEqualTo: Timestamp.fromDate(endDate));
+      }
+
+      return await query.limit(limit).get();
+    } catch (e) {
+      throw Exception('Failed to get expenses: $e');
+    }
+  }
+
+  // Stream monthly expenses
+  Stream<QuerySnapshot> streamMonthlyExpenses(
+    String systemId,
+    DateTime month,
+  ) {
+    final firstDay = DateTime(month.year, month.month, 1);
+    final lastDay = DateTime(month.year, month.month + 1, 0);
+
+    return _firestore
+        .collection(expensesCollection)
+        .doc(systemId)
+        .collection('records')
+        .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(firstDay))
+        .where('date', isLessThanOrEqualTo: Timestamp.fromDate(lastDay))
+        .orderBy('date', descending: true)
+        .snapshots();
+  }
+
+  // Update expense
+  Future<void> updateExpense(
+    String systemId,
+    String expenseId,
+    Map<String, dynamic> updates,
+  ) async {
+    try {
+      await _firestore
+          .collection(expensesCollection)
+          .doc(systemId)
+          .collection('records')
+          .doc(expenseId)
+          .update(updates);
+    } catch (e) {
+      throw Exception('Failed to update expense: $e');
+    }
+  }
+
+  // Delete expense
+  Future<void> deleteExpense(String systemId, String expenseId) async {
+    try {
+      await _firestore
+          .collection(expensesCollection)
+          .doc(systemId)
+          .collection('records')
+          .doc(expenseId)
+          .delete();
+    } catch (e) {
+      throw Exception('Failed to delete expense: $e');
+    }
+  }
+
+  // ==================== UTILITY METHODS ====================
+
+  // Batch update (for efficiency)
+  Future<void> batchUpdate(List<Map<String, dynamic>> updates) async {
+    try {
+      WriteBatch batch = _firestore.batch();
+
+      for (var update in updates) {
+        DocumentReference docRef = _firestore
+            .collection(update['collection'])
+            .doc(update['docId']);
+        batch.update(docRef, update['data']);
+      }
+
+      await batch.commit();
+    } catch (e) {
+      throw Exception('Failed to perform batch update: $e');
+    }
+  }
+
+  // Transaction update (for atomic operations)
+  Future<T> runTransaction<T>(
+    Future<T> Function(Transaction transaction) updateFunction,
+  ) async {
+    try {
+      return await _firestore.runTransaction(updateFunction);
+    } catch (e) {
+      throw Exception('Failed to run transaction: $e');
     }
   }
 }
