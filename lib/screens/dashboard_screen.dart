@@ -405,7 +405,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     const SizedBox(height: 16),
                     
-                    // Features Grid
+                    // Core Features Grid (Original 4)
                     GridView.count(
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
@@ -437,6 +437,51 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           title: 'Expenses',
                           color: Colors.red,
                           onTap: () => Navigator.pushNamed(context, '/expenses'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+
+                    // Advanced Features Header
+                    const Text(
+                      'Advanced Features',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // New Features Grid (Features 7-9)
+                    GridView.count(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      crossAxisCount: 2,
+                      crossAxisSpacing: 16,
+                      mainAxisSpacing: 16,
+                      childAspectRatio: 1.2,
+                      children: [
+                        // Feature 7: Recipe Browser
+                        _FeatureCard(
+                          icon: Icons.restaurant_menu,
+                          title: 'Recipe Browser',
+                          color: Colors.teal,
+                          onTap: () => Navigator.pushNamed(context, '/recipe-browser'),
+                        ),
+                        // Feature 8: Cooking Rotation
+                        _FeatureCard(
+                          icon: Icons.rotate_right,
+                          title: 'Cooking Rotation',
+                          color: Colors.indigo,
+                          onTap: () => Navigator.pushNamed(context, '/cooking-rotation'),
+                        ),
+                        // Feature 9: Inventory Tracker
+                        _FeatureCard(
+                          icon: Icons.inventory_2,
+                          title: 'Inventory',
+                          color: Colors.deepOrange,
+                          onTap: () => Navigator.pushNamed(context, '/inventory'),
                         ),
                       ],
                     ),
@@ -555,6 +600,7 @@ class _FeatureCard extends StatelessWidget {
                 fontWeight: FontWeight.bold,
                 fontSize: 14,
               ),
+              textAlign: TextAlign.center,
             ),
           ],
         ),

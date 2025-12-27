@@ -13,6 +13,8 @@ class DatabaseService {
   String get attendanceCollection => 'attendance';
   String get groceryListsCollection => 'groceryLists';
   String get expensesCollection => 'expenses';
+  String get inventoryCollection => 'inventory';
+  String get cookingRotationCollection => 'cookingRotation';
 
   // ==================== USER OPERATIONS ====================
 
@@ -589,6 +591,82 @@ class DatabaseService {
           .delete();
     } catch (e) {
       throw Exception('Failed to delete expense: $e');
+    }
+  }
+
+  // ==================== INVENTORY OPERATIONS ====================
+
+  // Get all inventory items for a system
+  Stream<QuerySnapshot> streamInventoryItems(String systemId) {
+    return _firestore
+        .collection(inventoryCollection)
+        .doc(systemId)
+        .collection('items')
+        .orderBy('name')
+        .snapshots();
+  }
+
+  // Add inventory item
+  Future<void> addInventoryItem(
+    String systemId,
+    String itemId,
+    Map<String, dynamic> itemData,
+  ) async {
+    try {
+      await _firestore
+          .collection(inventoryCollection)
+          .doc(systemId)
+          .collection('items')
+          .doc(itemId)
+          .set(itemData);
+    } catch (e) {
+      throw Exception('Failed to add inventory item: $e');
+    }
+  }
+
+  // Update inventory item
+  Future<void> updateInventoryItem(
+    String systemId,
+    String itemId,
+    Map<String, dynamic> updates,
+  ) async {
+    try {
+      await _firestore
+          .collection(inventoryCollection)
+          .doc(systemId)
+          .collection('items')
+          .doc(itemId)
+          .update(updates);
+    } catch (e) {
+      throw Exception('Failed to update inventory item: $e');
+    }
+  }
+
+  // Delete inventory item
+  Future<void> deleteInventoryItem(String systemId, String itemId) async {
+    try {
+      await _firestore
+          .collection(inventoryCollection)
+          .doc(systemId)
+          .collection('items')
+          .doc(itemId)
+          .delete();
+    } catch (e) {
+      throw Exception('Failed to delete inventory item: $e');
+    }
+  }
+
+  // Get single inventory item
+  Future<DocumentSnapshot?> getInventoryItem(String systemId, String itemId) async {
+    try {
+      return await _firestore
+          .collection(inventoryCollection)
+          .doc(systemId)
+          .collection('items')
+          .doc(itemId)
+          .get();
+    } catch (e) {
+      throw Exception('Failed to get inventory item: $e');
     }
   }
 

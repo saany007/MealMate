@@ -21,6 +21,12 @@ import 'screens/attendance_history_screen.dart';
 import 'screens/expense_screen.dart';
 import 'screens/add_expense_screen.dart';
 import 'screens/expense_summary_screen.dart';
+import 'screens/inventory_screen.dart';
+import 'screens/add_inventory_item_screen.dart';
+import 'screens/cooking_rotation_screen.dart';
+import 'screens/rotation_settings_screen.dart';
+import 'screens/recipe_browser_screen.dart';
+import 'screens/recipe_detail_screen.dart';
 
 // Services
 import 'services/auth_service.dart';
@@ -28,6 +34,9 @@ import 'services/meal_system_service.dart';
 import 'services/grocery_service.dart';
 import 'services/attendance_service.dart';
 import 'services/expense_service.dart';
+import 'services/inventory_service.dart';
+import 'services/cooking_rotation_service.dart';
+import 'services/recipe_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -52,6 +61,9 @@ class MealMateApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => GroceryService()),
         ChangeNotifierProvider(create: (_) => AttendanceService()),
         ChangeNotifierProvider(create: (_) => ExpenseService()),
+        ChangeNotifierProvider(create: (_) => InventoryService()),
+        ChangeNotifierProvider(create: (_) => CookingRotationService()),
+        ChangeNotifierProvider(create: (_) => RecipeService()),
       ],
       child: MaterialApp(
         title: 'MealMate',
@@ -134,6 +146,13 @@ class MealMateApp extends StatelessWidget {
           '/expenses': (context) => const ExpenseScreen(),
           '/add-expense': (context) => const AddExpenseScreen(),
           '/expense-summary': (context) => const ExpenseSummaryScreen(),
+          '/inventory': (context) => const InventoryScreen(),
+          '/add-inventory-item': (context) => const AddInventoryItemScreen(),
+          '/edit-inventory-item': (context) => const AddInventoryItemScreen(),
+          '/cooking-rotation': (context) => const CookingRotationScreen(),
+          '/rotation-settings': (context) => const RotationSettingsScreen(),
+          '/recipe-browser': (context) => const RecipeBrowserScreen(),
+          '/recipe-detail': (context) => const RecipeDetailScreen(),
         },
       ),
     );
