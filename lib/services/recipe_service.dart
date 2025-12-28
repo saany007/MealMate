@@ -4,9 +4,7 @@ import 'dart:convert';
 import '../models/recipe_model.dart';
 
 class RecipeService extends ChangeNotifier {
-  // IMPORTANT: Replace with your actual Spoonacular API key
-  // Get free API key from: https://spoonacular.com/food-api
-  static const String _apiKey = 'YOUR_SPOONACULAR_API_KEY';
+  static const String _apiKey = 'e391a902f58c42c0a3c757e407d4a8a5';
   static const String _baseUrl = 'https://api.spoonacular.com/recipes';
 
   bool _isLoading = false;
@@ -41,12 +39,20 @@ class RecipeService extends ChangeNotifier {
   // Search recipes with filters
   Future<List<RecipeModel>> searchRecipes({
     RecipeSearchFilters? filters,
+    String? query,
+    int? number,
   }) async {
     try {
       _setLoading(true);
       _setError(null);
 
       final queryParams = filters?.toQueryParameters() ?? {};
+      if (query != null) {
+        queryParams['query'] = query;
+      }
+      if (number != null) {
+        queryParams['number'] = number.toString();
+      }
       queryParams['apiKey'] = _apiKey;
       queryParams['addRecipeInformation'] = 'true';
       queryParams['fillIngredients'] = 'true';
@@ -350,6 +356,35 @@ class RecipeService extends ChangeNotifier {
     // Spoonacular image sizes: 90x90, 240x150, 312x150, 312x231, 480x360, 556x370, 636x393
     if (imageUrl.isEmpty) return '';
     return imageUrl.replaceAll('312x231', size);
+  }
+
+
+  // ==================== AUTO-GROCERY SUPPORT ==================== 
+  // Helper to find ingredients based on a menu string (e.g. "Chicken Curry")
+  // Since we store menus as Strings, we search for the best match and get its ingredients.
+  Future<List<Ingredient>> getIngredientsForMenu(String menuName) async {
+    if (menuName.isEmpty || menuName.toLowerCase() == 'tbd') return [];
+    
+    try {
+      // 1. Search for the recipe
+      final recipes = await searchRecipes(query: menuName, number: 1);
+      
+      if (recipes.isNotEmpty) {
+        // 2. Get full details (ingredients are often truncated in search results)        
+        final recipe = recipes.first;
+        if (recipe.extendedIngredients != null && recipe.extendedIngredients!.isNotEmpty) {
+          return recipe.extendedIngredients!;
+        } else {
+          // If not populated, fetch details
+          final detailedRecipe = await getRecipeById(recipe.id);
+          return detailedRecipe?.extendedIngredients ?? [];
+        }
+      }
+      return [];
+    } catch (e) {
+      _setError('Error getting ingredients for menu $menuName: $e');
+      return [];
+    }
   }
 
   // Clear search results

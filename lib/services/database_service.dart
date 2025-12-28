@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart';
 import '../models/user_model.dart';
 import '../models/meal_system_model.dart';
 import '../models/daily_meal_model.dart';
@@ -676,9 +677,36 @@ class DatabaseService {
     }
   }
 
-  // ==================== UTILITY METHODS ====================
 
-  // Batch update (for efficiency)
+  // ==================== AUTO-GROCERY SUPPORT ====================
+
+  // Get daily meals for a specific date range
+  Future<List<DailyMealModel>> getDailyMealsForRange(
+      String systemId, DateTime startDate, DateTime endDate) async {
+    try {
+      final startStr = DateFormat('yyyy-MM-dd').format(startDate);
+      final endStr = DateFormat('yyyy-MM-dd').format(endDate);
+
+      // Note: Firestore string comparison works for ISO dates (yyyy-MM-dd)
+      final snapshot = await _firestore
+          .collection(mealCalendarCollection)
+          .doc(systemId)
+          .collection('days')
+          .where(FieldPath.documentId, isGreaterThanOrEqualTo: startStr)
+          .where(FieldPath.documentId, isLessThanOrEqualTo: endStr)
+          .get();
+
+      return snapshot.docs
+          .map((doc) => DailyMealModel.fromMap(doc.id, doc.data()))
+          .toList();
+    } catch (e) {
+      throw Exception('Error getting meals for range: $e');
+    }
+  }
+
+
+  // ==================== UTILITY METHODS ====================
+  
   Future<void> batchUpdate(List<Map<String, dynamic>> updates) async {
     try {
       WriteBatch batch = _firestore.batch();

@@ -3,6 +3,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
 import '../models/grocery_list_model.dart';
 import '../models/grocery_item_model.dart';
+import '../models/recipe_model.dart'; 
+import 'database_service.dart';
+import 'recipe_service.dart';
+import 'inventory_service.dart';
 
 class GroceryService extends ChangeNotifier {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -387,5 +391,134 @@ class GroceryService extends ChangeNotifier {
     return _currentList!.items.values
         .where((item) => !item.isChecked)
         .toList();
+  }
+
+
+  // ==================== AUTO-GENERATE GROCERY LIST ====================
+
+  /// Automatically generates grocery items based on the Meal Calendar for the next [days] days.
+  /// It connects [DatabaseService] (to get meals), [RecipeService] (to get ingredients),
+  /// and [InventoryService] (to check stock).
+  Future<void> autoGenerateGroceryList({
+    required String systemId,
+    required String userId,
+    required DatabaseService databaseService,
+    required RecipeService recipeService,
+    required InventoryService inventoryService,
+    int days = 7,
+  }) async {
+    try {
+      _setLoading(true);
+      
+      // 1. Fetch meals for the next X days
+      final startDate = DateTime.now();
+      final endDate = startDate.add(Duration(days: days));
+      
+      final meals = await databaseService.getDailyMealsForRange(systemId, startDate, endDate);
+      
+      if (meals.isEmpty) {
+        _setLoading(false);
+        return;
+      }
+
+      // 2. Extract unique menu strings from all meal slots
+      final Set<String> menus = {};
+      for (var day in meals) {
+        if (day.breakfast.menu != null && day.breakfast.menu!.isNotEmpty) menus.add(day.breakfast.menu!);
+        if (day.lunch.menu != null && day.lunch.menu!.isNotEmpty) menus.add(day.lunch.menu!);
+        if (day.dinner.menu != null && day.dinner.menu!.isNotEmpty) menus.add(day.dinner.menu!);
+      }
+      
+      // 3. Collect required ingredients
+      // Map: Ingredient Name -> Needed Quantity (simplified assumption: base quantity = 1 unit per recipe)
+      final Map<String, double> neededIngredients = {};
+      // Map: Ingredient Name -> Unit
+      final Map<String, String> ingredientUnits = {};
+      // Map: Ingredient Name -> Aisle/Category
+      final Map<String, String> ingredientCategories = {};
+
+      for (var menu in menus) {
+        if (menu.toLowerCase() == 'tbd') continue;
+
+        // Use RecipeService to guess ingredients for this menu string
+        final ingredients = await recipeService.getIngredientsForMenu(menu);
+        
+        for (var ing in ingredients) {
+          final name = ing.name.toLowerCase();
+          // Accumulate quantity (defaulting to the recipe's measure)
+          neededIngredients[name] = (neededIngredients[name] ?? 0) + ing.amount;
+          ingredientUnits[name] = ing.unit;
+          ingredientCategories[name] = ing.aisle ?? 'Other';
+        }
+      }
+
+      // 4. Fetch current inventory to compare
+      // We assume InventoryService has loaded items, or we force a reload
+      await inventoryService.getItems(systemId); 
+      final inventoryItems = inventoryService.items;
+
+      // 5. Subtract inventory from needed
+      for (var invItem in inventoryItems) {
+        final name = invItem.name.toLowerCase();
+        // Check if we need this item
+        // Note: This is a simple string match. Advanced logic would need fuzzy matching/synonyms.
+        if (neededIngredients.containsKey(name)) {
+          final needed = neededIngredients[name]!;
+          // Simple subtraction (ignoring complex unit conversion for this academic prototype)
+          // We assume units match roughly or user can adjust.
+          final remaining = needed - invItem.quantity;
+          
+          if (remaining <= 0) {
+             neededIngredients.remove(name); // We have enough
+          } else {
+             neededIngredients[name] = remaining; // We need this much more
+          }
+        }
+      }
+
+      // 6. Add remaining needed items to Grocery List
+      if (neededIngredients.isNotEmpty) {
+        // Ensure list exists
+        if (_currentList == null) {
+          await createGroceryList(systemId: systemId, createdBy: userId);
+        }
+        
+        // Batch add items
+        for (var entry in neededIngredients.entries) {
+          final name = entry.key;
+          final qty = entry.value;
+          final unit = ingredientUnits[name] ?? 'unit';
+          final categoryRaw = ingredientCategories[name] ?? 'Other';
+          
+          // Map Spoonacular aisle to our GroceryCategory enum manually or use generic
+          String category = GroceryCategory.other;
+          if (categoryRaw.contains('Produce')) category = GroceryCategory.vegetables;
+          else if (categoryRaw.contains('Meat')) category = GroceryCategory.meat;
+          else if (categoryRaw.contains('Milk') || categoryRaw.contains('Cheese')) category = GroceryCategory.dairy;
+          else if (categoryRaw.contains('Spices')) category = GroceryCategory.spices;
+          // ... add more mappings as needed
+
+          // Add to list (Capitalize first letter of name)
+          final displayName = name[0].toUpperCase() + name.substring(1);
+          
+          await addItem(
+            systemId: systemId,
+            listId: _currentList!.listId,
+            name: displayName,
+            quantity: double.parse(qty.toStringAsFixed(1)), // Round to 1 decimal
+            unit: unit,
+            estimatedCost: 0, // Unknown cost at this stage
+            category: category,
+            addedBy: userId,
+            isOptional: false, // Auto-generated are usually needed
+          );
+        }
+      }
+
+    } catch (e) {
+      _setError('Failed to auto-generate list: $e');
+    } finally {
+      _setLoading(false);
+    }
   }
 }
