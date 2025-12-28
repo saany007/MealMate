@@ -27,6 +27,9 @@ import 'screens/cooking_rotation_screen.dart';
 import 'screens/rotation_settings_screen.dart';
 import 'screens/recipe_browser_screen.dart';
 import 'screens/recipe_detail_screen.dart';
+import 'screens/shopping_trip_screen.dart';
+import 'screens/meal_preference_screen.dart';
+import 'screens/settlement_report_screen.dart';
 
 // Services
 import 'services/auth_service.dart';
@@ -37,6 +40,9 @@ import 'services/expense_service.dart';
 import 'services/inventory_service.dart';
 import 'services/cooking_rotation_service.dart';
 import 'services/recipe_service.dart';
+import 'services/shopping_trip_service.dart';
+import 'services/meal_preference_service.dart';
+import 'services/settlement_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -64,6 +70,9 @@ class MealMateApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => InventoryService()),
         ChangeNotifierProvider(create: (_) => CookingRotationService()),
         ChangeNotifierProvider(create: (_) => RecipeService()),
+        ChangeNotifierProvider(create: (_) => ShoppingTripService()),
+        ChangeNotifierProvider(create: (_) => MealPreferenceService()),
+        ChangeNotifierProvider(create: (_) => SettlementService()),
       ],
       child: MaterialApp(
         title: 'MealMate',
@@ -153,6 +162,9 @@ class MealMateApp extends StatelessWidget {
           '/rotation-settings': (context) => const RotationSettingsScreen(),
           '/recipe-browser': (context) => const RecipeBrowserScreen(),
           '/recipe-detail': (context) => const RecipeDetailScreen(),
+          '/shopping-trips': (context) => const ShoppingTripScreen(),
+          '/meal-preferences': (context) => const MealPreferenceScreen(),
+          '/settlement-reports': (context) => const SettlementReportScreen(),
         },
       ),
     );

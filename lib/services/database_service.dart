@@ -15,6 +15,12 @@ class DatabaseService {
   String get expensesCollection => 'expenses';
   String get inventoryCollection => 'inventory';
   String get cookingRotationCollection => 'cookingRotation';
+  // NEW COLLECTIONS FOR FEATURES 10-13
+  String get shoppingTripsCollection => 'shoppingTrips';
+  String get shoppingRotationCollection => 'shoppingRotation';
+  String get mealPreferencesCollection => 'mealPreferences';
+  String get settlementReportsCollection => 'settlementReports';
+  String get paymentsCollection => 'payments';
 
   // ==================== USER OPERATIONS ====================
 
