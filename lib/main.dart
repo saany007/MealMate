@@ -43,6 +43,7 @@ import 'services/recipe_service.dart';
 import 'services/shopping_trip_service.dart';
 import 'services/meal_preference_service.dart';
 import 'services/settlement_service.dart';
+import 'services/notification_service.dart'; // Added NotificationService
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -51,17 +52,31 @@ void main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+
+  // Initialize Notifications
+  final notificationService = NotificationService();
+  await notificationService.initialize();
+  // Schedule the default daily reminder immediately
+  await notificationService.scheduleDailyMealReminder();
   
-  runApp(const MealMateApp());
+  runApp(MealMateApp(notificationService: notificationService));
 }
 
 class MealMateApp extends StatelessWidget {
-  const MealMateApp({super.key});
+  final NotificationService notificationService;
+
+  const MealMateApp({
+    super.key, 
+    required this.notificationService,
+  });
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
+        // Inject NotificationService
+        Provider<NotificationService>.value(value: notificationService),
+        
         ChangeNotifierProvider(create: (_) => AuthService()),
         ChangeNotifierProvider(create: (_) => MealSystemService()),
         ChangeNotifierProvider(create: (_) => GroceryService()),
