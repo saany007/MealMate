@@ -31,7 +31,12 @@ class _RecipeBrowserScreenState extends State<RecipeBrowserScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _loadRandomRecipes();
+    
+    // FIX: Wait for the first frame to complete before loading data
+    // This prevents the "setState() called during build" error
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadRandomRecipes();
+    });
   }
 
   @override
@@ -215,8 +220,12 @@ class _RecipeBrowserScreenState extends State<RecipeBrowserScreen>
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
         title: const Text('Recipe Browser'),
+        // FIX START: Changed background color and tab text colors for visibility
+        backgroundColor: const Color(0xFF16A34A),
         bottom: TabBar(
           controller: _tabController,
+          labelColor: Colors.white, // Selected text color
+          unselectedLabelColor: Colors.white70, // Unselected text color
           indicatorColor: Colors.white,
           tabs: const [
             Tab(text: 'Discover'),
@@ -224,6 +233,7 @@ class _RecipeBrowserScreenState extends State<RecipeBrowserScreen>
             Tab(text: 'By Ingredients'),
           ],
         ),
+        // FIX END
       ),
       body: TabBarView(
         controller: _tabController,

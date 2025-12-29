@@ -128,7 +128,6 @@ class _SettlementDetailScreenState extends State<SettlementDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final authService = Provider.of<AuthService>(context);
-    final settlementService = Provider.of<SettlementService>(context);
     final monthName = DateFormat('MMMM yyyy').format(_report.month);
     final myUserId = authService.userModel?.userId;
     final mySettlement = myUserId != null ? _report.memberSettlements[myUserId] : null;
@@ -138,7 +137,7 @@ class _SettlementDetailScreenState extends State<SettlementDetailScreen> {
       appBar: AppBar(
         title: Text('Settlement - $monthName'),
         actions: [
-          if (!_report.isFinalized && !_report.isFullyPaid)
+          if (_report.status == 'draft')
             IconButton(
               icon: const Icon(Icons.check_circle),
               tooltip: 'Finalize Report',
@@ -202,12 +201,18 @@ class _SettlementDetailScreenState extends State<SettlementDetailScreen> {
             ),
             const SizedBox(height: 16),
 
-            // My Settlement (if applicable)
+            // My Settlement (Top Priority Card)
             if (mySettlement != null) ...[
-              Card(
-                elevation: 3,
-                color: mySettlement.owes ? Colors.red[50] : Colors.green[50],
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              Container(
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: mySettlement.netBalance > 0 ? Colors.red[50] : Colors.green[50],
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: mySettlement.netBalance > 0 ? Colors.red.shade200 : Colors.green.shade200,
+                    width: 2,
+                  ),
+                ),
                 child: Padding(
                   padding: const EdgeInsets.all(20),
                   child: Column(
@@ -216,176 +221,158 @@ class _SettlementDetailScreenState extends State<SettlementDetailScreen> {
                       Row(
                         children: [
                           Icon(
-                            mySettlement.owes ? Icons.payment : Icons.account_balance_wallet,
-                            color: mySettlement.owes ? Colors.red : Colors.green,
+                            mySettlement.netBalance > 0 ? Icons.warning_amber_rounded : Icons.check_circle_outline,
+                            color: mySettlement.netBalance > 0 ? Colors.red : Colors.green,
                             size: 28,
                           ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: Text(
-                              mySettlement.owes ? 'You Owe' : mySettlement.shouldReceive ? 'You Receive' : 'Balanced',
+                              mySettlement.netBalance > 0 ? 'YOU NEED TO PAY' : 'YOU WILL RECEIVE',
                               style: TextStyle(
-                                fontSize: 18,
+                                fontSize: 16,
                                 fontWeight: FontWeight.bold,
-                                color: mySettlement.owes ? Colors.red[900] : Colors.green[900],
+                                color: mySettlement.netBalance > 0 ? Colors.red[900] : Colors.green[900],
+                                letterSpacing: 0.5,
                               ),
                             ),
                           ),
                         ],
                       ),
                       const SizedBox(height: 12),
-                      Text(
-                        '${mySettlement.absoluteBalance.toStringAsFixed(2)} BDT',
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                          color: mySettlement.owes ? Colors.red[800] : Colors.green[800],
-                        ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            '${mySettlement.netBalance.abs().toStringAsFixed(2)} BDT',
+                            style: TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                              color: mySettlement.netBalance > 0 ? Colors.red[800] : Colors.green[800],
+                            ),
+                          ),
+                          // PAY BUTTON (Visible if you owe > 0)
+                          if (mySettlement.netBalance > 0)
+                            ElevatedButton.icon(
+                              onPressed: () => _makePayment(mySettlement),
+                              icon: const Icon(Icons.payment, size: 18),
+                              label: const Text('PAY NOW'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.red,
+                                foregroundColor: Colors.white,
+                                elevation: 2,
+                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                              ),
+                            ),
+                        ],
                       ),
                       const SizedBox(height: 8),
                       Text(
                         'Meals eaten: ${mySettlement.mealsEaten} | Paid: ${mySettlement.totalPaid.toStringAsFixed(0)} BDT',
                         style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[700],
+                          fontSize: 13,
+                          color: Colors.grey[800],
                         ),
                       ),
-                      if (mySettlement.owes && _report.isFinalized) ...[
-                        const SizedBox(height: 16),
-                        ElevatedButton.icon(
-                          onPressed: () => _makePayment(mySettlement),
-                          icon: const Icon(Icons.payment),
-                          label: const Text('Make Payment'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red,
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                          ),
-                        ),
-                      ],
                     ],
                   ),
                 ),
               ),
-              const SizedBox(height: 16),
             ],
 
             // Settlement Transactions Button
-            if (_report.isFinalized) ...[
-              OutlinedButton.icon(
-                onPressed: _viewSettlementTransactions,
-                icon: const Icon(Icons.swap_horiz),
-                label: const Text('View Settlement Transactions'),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                ),
+            OutlinedButton.icon(
+              onPressed: _viewSettlementTransactions,
+              icon: const Icon(Icons.swap_horiz),
+              label: const Text('View Who Pays Whom'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                side: BorderSide(color: Colors.grey.shade400),
               ),
-              const SizedBox(height: 16),
-            ],
+            ),
+            const SizedBox(height: 24),
 
             // Category Breakdown
             if (_report.categoryBreakdown.isNotEmpty) ...[
+              const Text(
+                'Expense Categories',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
               Card(
-                elevation: 2,
+                elevation: 1,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 child: Padding(
-                  padding: const EdgeInsets.all(20),
+                  padding: const EdgeInsets.all(16),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Expense Categories',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
+                    children: _report.categoryBreakdown.entries.map((entry) {
+                      final percentage = (_report.totalExpenses > 0
+                          ? (entry.value / _report.totalExpenses) * 100
+                          : 0).toStringAsFixed(1);
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: _CategoryBar(
+                          category: entry.key,
+                          amount: entry.value,
+                          percentage: double.parse(percentage),
+                          total: _report.totalExpenses,
                         ),
-                      ),
-                      const SizedBox(height: 16),
-                      ..._report.categoryBreakdown.entries.map((entry) {
-                        final percentage = (_report.totalExpenses > 0
-                            ? (entry.value / _report.totalExpenses) * 100
-                            : 0).toStringAsFixed(1);
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: _CategoryBar(
-                            category: entry.key,
-                            amount: entry.value,
-                            percentage: double.parse(percentage),
-                            total: _report.totalExpenses,
-                          ),
-                        );
-                      }),
-                    ],
+                      );
+                    }).toList(),
                   ),
                 ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 24),
             ],
 
-            // Members Who Owe
-            if (_report.membersWhoOwe.isNotEmpty) ...[
-              const Text(
-                'Members Who Owe',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 12),
-              ..._report.membersWhoOwe.map((settlement) {
-                return _MemberSettlementCard(
-                  settlement: settlement,
-                  status: 'owes',
-                  onPayment: _report.isFinalized ? () => _makePayment(settlement) : null,
-                  isMe: settlement.userId == myUserId,
-                );
-              }),
-              const SizedBox(height: 16),
-            ],
-
-            // Members To Receive
-            if (_report.membersToReceive.isNotEmpty) ...[
-              const Text(
-                'Members To Receive',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 12),
-              ..._report.membersToReceive.map((settlement) {
-                return _MemberSettlementCard(
-                  settlement: settlement,
-                  status: 'receive',
-                  isMe: settlement.userId == myUserId,
-                );
-              }),
-              const SizedBox(height: 16),
-            ],
-
-            // Balanced Members
-            if (_report.balancedMembers.isNotEmpty) ...[
-              const Text(
-                'Balanced Members',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 12),
-              ..._report.balancedMembers.map((settlement) {
-                return _MemberSettlementCard(
-                  settlement: settlement,
-                  status: 'balanced',
-                  isMe: settlement.userId == myUserId,
-                );
-              }),
-            ],
+            // Full Member List
+            _buildMembersList(myUserId),
           ],
         ),
       ),
     );
   }
+
+  Widget _buildMembersList(String? myUserId) {
+    // Sort members: Debtors first (Red), then Creditors (Green)
+    List<MemberSettlement> members = _report.memberSettlements.values.toList();
+    members.sort((a, b) => b.netBalance.compareTo(a.netBalance));
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'All Member Status',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 12),
+        ...members.map((settlement) {
+          String status = 'balanced';
+          if (settlement.netBalance > 0) status = 'owes';
+          if (settlement.netBalance < 0) status = 'receive';
+
+          return _MemberSettlementCard(
+            settlement: settlement,
+            status: status,
+            // Allow payment if it's ME and I OWE
+            onPayment: (settlement.userId == myUserId && status == 'owes') 
+                ? () => _makePayment(settlement) 
+                : null,
+            isMe: settlement.userId == myUserId,
+          );
+        }),
+        const SizedBox(height: 30), // Bottom padding
+      ],
+    );
+  }
 }
+
+// ---------------------------------------------------------------------------
+// HELPER WIDGETS
+// ---------------------------------------------------------------------------
 
 class _SummaryItem extends StatelessWidget {
   final IconData icon;
@@ -519,26 +506,28 @@ class _MemberSettlementCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final statusColor = _getStatusColor();
+    final statusText = status == 'owes' ? 'NEEDS TO PAY' : (status == 'receive' ? 'GETS BACK' : 'SETTLED');
+
     return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      elevation: isMe ? 3 : 1,
+      margin: const EdgeInsets.only(bottom: 10),
+      elevation: 1,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: isMe ? BorderSide(color: _getStatusColor(), width: 2) : BorderSide.none,
+        side: BorderSide(color: statusColor.withOpacity(0.3), width: 1),
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
                 CircleAvatar(
-                  backgroundColor: _getStatusColor().withOpacity(0.2),
+                  backgroundColor: statusColor.withOpacity(0.1),
                   child: Text(
-                    settlement.userName[0].toUpperCase(),
+                    settlement.userName.isNotEmpty ? settlement.userName[0].toUpperCase() : '?',
                     style: TextStyle(
-                      color: _getStatusColor(),
+                      color: statusColor,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -562,11 +551,11 @@ class _MemberSettlementCard extends StatelessWidget {
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                               decoration: BoxDecoration(
-                                color: _getStatusColor(),
-                                borderRadius: BorderRadius.circular(10),
+                                color: Colors.blue,
+                                borderRadius: BorderRadius.circular(4),
                               ),
                               child: const Text(
-                                'You',
+                                'YOU',
                                 style: TextStyle(
                                   fontSize: 10,
                                   color: Colors.white,
@@ -577,52 +566,42 @@ class _MemberSettlementCard extends StatelessWidget {
                           ],
                         ],
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 2),
                       Text(
-                        '${settlement.mealsEaten} meals eaten',
+                        statusText,
                         style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: statusColor,
                         ),
                       ),
                     ],
                   ),
                 ),
                 Text(
-                  '${settlement.absoluteBalance.toStringAsFixed(2)} BDT',
+                  '${settlement.netBalance.abs().toStringAsFixed(0)} BDT',
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
-                    color: _getStatusColor(),
+                    color: statusColor,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Owed: ${settlement.totalOwed.toStringAsFixed(0)} BDT',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-                ),
-                Text(
-                  'Paid: ${settlement.totalPaid.toStringAsFixed(0)} BDT',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
-              ],
-            ),
-            if (onPayment != null && status == 'owes') ...[
+            
+            // Payment Button inside the list item (if it's me and I owe)
+            if (onPayment != null) ...[
               const SizedBox(height: 12),
-              ElevatedButton.icon(
-                onPressed: onPayment,
-                icon: const Icon(Icons.payment, size: 16),
-                label: const Text('Pay Now'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.red,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  textStyle: const TextStyle(fontSize: 13),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: onPayment,
+                  icon: const Icon(Icons.payment, size: 16),
+                  label: const Text('PAY NOW'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red,
+                    side: const BorderSide(color: Colors.red),
+                  ),
                 ),
               ),
             ],
@@ -642,20 +621,20 @@ class _SettlementTransactionsSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(24),
+      height: MediaQuery.of(context).size.height * 0.6,
       child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
-                'Settlement Transactions',
+                'Who Pays Whom?',
                 style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              const Spacer(),
               IconButton(
                 icon: const Icon(Icons.close),
                 onPressed: () => Navigator.pop(context),
@@ -664,57 +643,72 @@ class _SettlementTransactionsSheet extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           const Text(
-            'Optimized payment plan to settle all balances:',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey,
-            ),
+            'Follow this plan to settle all balances:',
+            style: TextStyle(color: Colors.grey),
           ),
           const SizedBox(height: 16),
-          ...transactions.map((txn) {
-            return Card(
-              margin: const EdgeInsets.only(bottom: 12),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            txn.fromUserName,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                            ),
+          Expanded(
+            child: transactions.isEmpty
+                ? const Center(child: Text("Everything is settled!"))
+                : ListView.builder(
+                    itemCount: transactions.length,
+                    itemBuilder: (context, index) {
+                      final txn = transactions[index];
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        elevation: 2,
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Row(
+                            children: [
+                              // Payer
+                              Expanded(
+                                flex: 2,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      txn.fromUserName,
+                                      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.red),
+                                    ),
+                                    const Text("PAYS", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                                  ],
+                                ),
+                              ),
+                              // Amount & Arrow
+                              Expanded(
+                                flex: 3,
+                                child: Column(
+                                  children: [
+                                    const Icon(Icons.arrow_forward, color: Colors.grey),
+                                    Text(
+                                      "${txn.amount.toStringAsFixed(0)} BDT",
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              // Receiver
+                              Expanded(
+                                flex: 2,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Text(
+                                      txn.toUserName,
+                                      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
+                                    ),
+                                    const Text("RECEIVES", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'pays ${txn.amount.toStringAsFixed(2)} BDT',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Icon(Icons.arrow_forward, color: Colors.green),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        txn.toUserName,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
                         ),
-                        textAlign: TextAlign.right,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }),
+                      );
+                    },
+                  ),
+          ),
         ],
       ),
     );

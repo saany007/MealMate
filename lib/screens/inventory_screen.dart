@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'; 
 import '../services/auth_service.dart';
 import '../services/inventory_service.dart';
 import '../models/inventory_item_model.dart';
@@ -31,17 +32,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
   @override
   void initState() {
     super.initState();
-    _loadInventory();
-  }
-
-  Future<void> _loadInventory() async {
-    final authService = Provider.of<AuthService>(context, listen: false);
-    final inventoryService = Provider.of<InventoryService>(context, listen: false);
-    final systemId = authService.userModel?.currentMealSystemId;
-
-    if (systemId != null) {
-      await inventoryService.getItems(systemId);
-    }
   }
 
   Color _getStockStatusColor(InventoryItemModel item) {
@@ -122,12 +112,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     if (systemId == null) {
       return Scaffold(
-        appBar: AppBar(
-          title: const Text('Inventory'),
-        ),
-        body: const Center(
-          child: Text('No meal system found'),
-        ),
+        appBar: AppBar(title: const Text('Inventory')),
+        body: const Center(child: Text('No meal system found')),
       );
     }
 
@@ -178,15 +164,18 @@ class _InventoryScreenState extends State<InventoryScreen> {
           ),
         ],
       ),
-      body: Consumer<InventoryService>(
-        builder: (context, inventoryService, child) {
-          if (inventoryService.isLoading) {
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('inventory')
+            .doc(systemId)
+            .collection('items')
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          var items = inventoryService.items;
-
-          if (items.isEmpty) {
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
             return Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -206,6 +195,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
               ),
             );
           }
+
+          // Parse items from snapshot
+          List<InventoryItemModel> items = snapshot.data!.docs
+              .map((doc) => InventoryItemModel.fromMap(doc.data() as Map<String, dynamic>))
+              .toList();
+
+          // Calculate stats manually since we are not using the service getter
+          int totalItems = items.length;
+          int lowStockItems = items.where((i) => i.isLowStock || i.isOutOfStock).length;
+          int expiringItems = items.where((i) => i.isExpiringSoon || i.isExpired).length;
 
           // Filter by category
           if (_selectedCategory != 'All') {
@@ -241,31 +240,29 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     ),
                   ],
                 ),
-                child: inventoryService.statistics != null
-                    ? Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceAround,
-                        children: [
-                          _StatItem(
-                            icon: Icons.inventory_2,
-                            label: 'Total',
-                            value: '${inventoryService.statistics!.totalItems}',
-                            color: Colors.blue,
-                          ),
-                          _StatItem(
-                            icon: Icons.warning,
-                            label: 'Low Stock',
-                            value: '${inventoryService.statistics!.lowStockItems}',
-                            color: Colors.orange,
-                          ),
-                          _StatItem(
-                            icon: Icons.event_busy,
-                            label: 'Expiring',
-                            value: '${inventoryService.statistics!.expiringItems}',
-                            color: Colors.red,
-                          ),
-                        ],
-                      )
-                    : const SizedBox(),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _StatItem(
+                      icon: Icons.inventory_2,
+                      label: 'Total',
+                      value: '$totalItems',
+                      color: Colors.blue,
+                    ),
+                    _StatItem(
+                      icon: Icons.warning,
+                      label: 'Low Stock',
+                      value: '$lowStockItems',
+                      color: Colors.orange,
+                    ),
+                    _StatItem(
+                      icon: Icons.event_busy,
+                      label: 'Expiring',
+                      value: '$expiringItems',
+                      color: Colors.red,
+                    ),
+                  ],
+                ),
               ),
 
               // Items List

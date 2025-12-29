@@ -4,7 +4,7 @@ import 'dart:convert';
 import '../models/recipe_model.dart';
 
 class RecipeService extends ChangeNotifier {
-  static const String _apiKey = 'e391a902f58c42c0a3c757e407d4a8a5';
+  static const String _apiKey = 'ba5455380a95424f98f3c6ab3f4d80d2';
   static const String _baseUrl = 'https://api.spoonacular.com/recipes';
 
   bool _isLoading = false;
@@ -80,6 +80,7 @@ class RecipeService extends ChangeNotifier {
             'Failed to search recipes. Status: ${response.statusCode}');
       }
     } catch (e) {
+      print("API SEARCH ERROR: $e"); // DEBUG LOG
       _setLoading(false);
       _setError('Failed to search recipes: $e');
       return [];
@@ -114,6 +115,7 @@ class RecipeService extends ChangeNotifier {
             'Failed to get recipe. Status: ${response.statusCode}');
       }
     } catch (e) {
+      print("API GET ID ERROR: $e"); // DEBUG LOG
       _setLoading(false);
       _setError('Failed to get recipe: $e');
       return null;
@@ -164,6 +166,7 @@ class RecipeService extends ChangeNotifier {
             'Failed to find recipes. Status: ${response.statusCode}');
       }
     } catch (e) {
+      print("API INGREDIENTS ERROR: $e"); // DEBUG LOG
       _setLoading(false);
       _setError('Failed to find recipes by ingredients: $e');
       return [];
@@ -210,6 +213,7 @@ class RecipeService extends ChangeNotifier {
             'Failed to get random recipes. Status: ${response.statusCode}');
       }
     } catch (e) {
+      print("API RANDOM RECIPE ERROR: $e"); // DEBUG LOG
       _setLoading(false);
       _setError('Failed to get random recipes: $e');
       return [];
@@ -382,6 +386,7 @@ class RecipeService extends ChangeNotifier {
       }
       return [];
     } catch (e) {
+      print("API MENU ERROR: $e"); // DEBUG LOG
       _setError('Error getting ingredients for menu $menuName: $e');
       return [];
     }

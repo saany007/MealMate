@@ -16,12 +16,14 @@ configurations.all {
 
 android {
     namespace = "com.example.mealmate"
-    compileSdk = 35
+    compileSdk = 36 // UPDATED: Changed from 35 to 36 to fix plugin errors
     ndkVersion = "27.0.12077973"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
+        // NEW: Required for flutter_local_notifications to work on older Android versions
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -31,7 +33,7 @@ android {
     defaultConfig {
         applicationId = "com.example.mealmate"
         minSdk = flutter.minSdkVersion
-        targetSdk = 35
+        targetSdk = 36 // UPDATED: Changed from 35 to 36
         versionCode = 1
         versionName = "1.0.0"
         multiDexEnabled = true
@@ -49,6 +51,9 @@ flutter {
 }
 
 dependencies {
+    // NEW: Core Library Desugaring (Required for notifications)
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+
     // Firebase BoM 
     implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
     

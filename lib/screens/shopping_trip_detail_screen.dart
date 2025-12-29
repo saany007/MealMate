@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+// Services & Models
 import '../services/shopping_trip_service.dart';
 import '../services/auth_service.dart';
 import '../models/shopping_trip_model.dart';
+import '../widgets/custom_button.dart';
+import '../widgets/custom_text_field.dart';
 
 class ShoppingTripDetailScreen extends StatefulWidget {
   final ShoppingTripModel trip;
@@ -18,623 +20,398 @@ class ShoppingTripDetailScreen extends StatefulWidget {
 }
 
 class _ShoppingTripDetailScreenState extends State<ShoppingTripDetailScreen> {
+  final _amountController = TextEditingController();
+  final _itemsController = TextEditingController();
+  final _notesController = TextEditingController();
+  
   late ShoppingTripModel _trip;
-  final TextEditingController _amountController = TextEditingController();
-  final TextEditingController _notesController = TextEditingController();
   bool _isUpdating = false;
-  String? _receiptURL;
 
   @override
   void initState() {
     super.initState();
     _trip = widget.trip;
-    _amountController.text = _trip.totalSpent > 0 ? _trip.totalSpent.toString() : '';
+    _amountController.text = _trip.totalSpent > 0 ? _trip.totalSpent.toStringAsFixed(0) : '';
+    _itemsController.text = _trip.itemsPurchased.join('\n');
     _notesController.text = _trip.notes ?? '';
-    _receiptURL = _trip.receiptURL;
   }
 
   @override
   void dispose() {
     _amountController.dispose();
+    _itemsController.dispose();
     _notesController.dispose();
     super.dispose();
   }
 
-  Future<void> _updateStatus(String newStatus) async {
-    setState(() {
-      _isUpdating = true;
-    });
-
-    final authService = Provider.of<AuthService>(context, listen: false);
-    final tripService = Provider.of<ShoppingTripService>(context, listen: false);
-
-    final success = await tripService.updateShoppingTrip(
-      systemId: authService.userModel!.currentMealSystemId!,
-      tripId: _trip.tripId,
-      status: newStatus,
-    );
-
-    setState(() {
-      _isUpdating = false;
-    });
-
-    if (mounted) {
-      if (success) {
-        // Reload data to get updated trip
-        await tripService.loadShoppingTrips(authService.userModel!.currentMealSystemId!);
-        final updatedTrip = tripService.trips.firstWhere(
-          (t) => t.tripId == _trip.tripId,
-          orElse: () => _trip,
-        );
-        setState(() {
-          _trip = updatedTrip;
-        });
-        
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Status updated to ${ShoppingTripStatus.getDisplayName(newStatus)}'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to update status'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _uploadReceipt() async {
-    final ImagePicker picker = ImagePicker();
-    final XFile? image = await picker.pickImage(source: ImageSource.camera);
-
-    if (image == null) return;
-
-    setState(() {
-      _isUpdating = true;
-    });
-
-    try {
-      final authService = Provider.of<AuthService>(context, listen: false);
-      final file = File(image.path);
-      final storageRef = FirebaseStorage.instance.ref();
-      final receiptRef = storageRef.child(
-        'receipts/${authService.userModel!.currentMealSystemId}/${_trip.tripId}_${DateTime.now().millisecondsSinceEpoch}.jpg',
-      );
-
-      await receiptRef.putFile(file);
-      final downloadURL = await receiptRef.getDownloadURL();
-
-      final tripService = Provider.of<ShoppingTripService>(context, listen: false);
-      final success = await tripService.updateShoppingTrip(
-        systemId: authService.userModel!.currentMealSystemId!,
-        tripId: _trip.tripId,
-        receiptURL: downloadURL,
-      );
-
-      if (success && mounted) {
-        setState(() {
-          _receiptURL = downloadURL;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Receipt uploaded successfully'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to upload receipt: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      setState(() {
-        _isUpdating = false;
-      });
-    }
-  }
-
-  Future<void> _completeTrip() async {
-    final amount = double.tryParse(_amountController.text.trim());
-    
-    if (amount == null || amount <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter a valid amount'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-
-    final shouldComplete = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Complete Shopping Trip'),
-        content: Text(
-          'Mark this shopping trip as completed with a total of ${amount.toStringAsFixed(2)} BDT?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Complete'),
-          ),
-        ],
+  void _showSnackBar(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red : Colors.green,
+        behavior: SnackBarBehavior.floating,
       ),
     );
+  }
 
-    if (shouldComplete != true) return;
-
-    setState(() {
-      _isUpdating = true;
-    });
-
-    final authService = Provider.of<AuthService>(context, listen: false);
-    final tripService = Provider.of<ShoppingTripService>(context, listen: false);
-
-    final success = await tripService.updateShoppingTrip(
-      systemId: authService.userModel!.currentMealSystemId!,
-      tripId: _trip.tripId,
-      status: ShoppingTripStatus.completed,
-      totalSpent: amount,
-      receiptURL: _receiptURL,
-      notes: _notesController.text.trim().isEmpty ? null : _notesController.text.trim(),
-      reimbursementStatus: ReimbursementStatus.pending,
-    );
-
-    setState(() {
-      _isUpdating = false;
-    });
-
-    if (mounted) {
-      if (success) {
-        // Reload to get updated trip
-        await tripService.loadShoppingTrips(authService.userModel!.currentMealSystemId!);
-        final updatedTrip = tripService.trips.firstWhere(
-          (t) => t.tripId == _trip.tripId,
-          orElse: () => _trip,
-        );
+  // --- NEW: START SHOPPING ---
+  Future<void> _startShopping() async {
+    setState(() => _isUpdating = true);
+    try {
+      final tripService = Provider.of<ShoppingTripService>(context, listen: false);
+      final success = await tripService.updateTrip(
+        systemId: _trip.systemId,
+        tripId: _trip.tripId,
+        updates: {'status': 'in_progress'},
+      );
+      
+      if (success && mounted) {
         setState(() {
-          _trip = updatedTrip;
+          _trip = _trip.copyWith(status: 'in_progress');
+          _isUpdating = false;
         });
+        _showSnackBar("Trip Started! Moved to Active tab.");
+      }
+    } catch (e) {
+      _showSnackBar("Error: $e", isError: true);
+      if (mounted) setState(() => _isUpdating = false);
+    }
+  }
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Shopping trip completed successfully'),
-            backgroundColor: Colors.green,
-          ),
+  // --- UPDATE TRIP DETAILS ---
+  Future<void> _updateTripDetails() async {
+    setState(() => _isUpdating = true);
+    
+    try {
+      final tripService = Provider.of<ShoppingTripService>(context, listen: false);
+      final double amount = double.tryParse(_amountController.text) ?? 0.0;
+      
+      final List<String> itemsList = _itemsController.text
+          .split('\n')
+          .where((item) => item.trim().isNotEmpty)
+          .map((item) => item.trim())
+          .toList();
+
+      final bool shouldComplete = amount > 0 && _trip.status != 'completed';
+
+      bool success;
+      if (shouldComplete) {
+        success = await tripService.completeTrip(
+          systemId: _trip.systemId,
+          tripId: _trip.tripId,
+          totalSpent: amount,
+          itemsPurchased: itemsList,
         );
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to complete shopping trip'),
-            backgroundColor: Colors.red,
-          ),
+        Map<String, dynamic> updates = {
+          'totalSpent': amount,
+          'itemsPurchased': itemsList,
+          'notes': _notesController.text.trim(),
+        };
+        
+        success = await tripService.updateTrip(
+          systemId: _trip.systemId,
+          tripId: _trip.tripId,
+          updates: updates,
         );
       }
+
+      if (success && mounted) {
+        _showSnackBar(shouldComplete ? "Trip Completed!" : "Trip Updated");
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      _showSnackBar("Error: $e", isError: true);
+    } finally {
+      if (mounted) setState(() => _isUpdating = false);
     }
   }
 
-  Future<void> _markReimbursementPaid() async {
-    final authService = Provider.of<AuthService>(context, listen: false);
-    final tripService = Provider.of<ShoppingTripService>(context, listen: false);
-
-    setState(() {
-      _isUpdating = true;
-    });
-
-    final success = await tripService.updateShoppingTrip(
-      systemId: authService.userModel!.currentMealSystemId!,
-      tripId: _trip.tripId,
-      reimbursementStatus: ReimbursementStatus.paid,
-    );
-
-    setState(() {
-      _isUpdating = false;
-    });
-
-    if (mounted) {
-      if (success) {
-        await tripService.loadShoppingTrips(authService.userModel!.currentMealSystemId!);
-        final updatedTrip = tripService.trips.firstWhere(
-          (t) => t.tripId == _trip.tripId,
-          orElse: () => _trip,
-        );
+  Future<void> _markReimbursed() async {
+    setState(() => _isUpdating = true);
+    try {
+      final tripService = Provider.of<ShoppingTripService>(context, listen: false);
+      final success = await tripService.updateTrip(
+        systemId: _trip.systemId,
+        tripId: _trip.tripId,
+        updates: {'reimbursementStatus': 'paid'},
+      );
+      
+      if (success && mounted) {
         setState(() {
-          _trip = updatedTrip;
+          _trip = _trip.copyWith(reimbursementStatus: 'paid');
+          _isUpdating = false;
         });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Reimbursement marked as paid'),
-            backgroundColor: Colors.green,
-          ),
-        );
+        _showSnackBar("Marked as Reimbursed");
       }
-    }
-  }
-
-  Color _getStatusColor() {
-    switch (_trip.status) {
-      case ShoppingTripStatus.pending:
-        return Colors.orange;
-      case ShoppingTripStatus.inProgress:
-        return Colors.blue;
-      case ShoppingTripStatus.completed:
-        return Colors.green;
-      default:
-        return Colors.grey;
+    } catch (e) {
+      _showSnackBar("Error: $e", isError: true);
+      if (mounted) setState(() => _isUpdating = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final authService = Provider.of<AuthService>(context);
-    final isAssignedToMe = authService.userModel?.userId == _trip.assignedTo;
+    final currentUserId = authService.userModel?.userId;
+    final isAssignee = currentUserId == _trip.assignedTo;
+    final canEdit = isAssignee; 
+    final isCompleted = _trip.status == 'completed';
+    final isPending = _trip.status == 'pending';
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        title: const Text('Shopping Trip Details'),
+        title: const Text("Trip Details"),
+        elevation: 0,
         actions: [
-          if (_trip.isPending && isAssignedToMe)
+          if (canEdit && !isCompleted && !isPending) // Only show Save check if Active
             IconButton(
-              icon: const Icon(Icons.play_arrow),
-              tooltip: 'Start Shopping',
-              onPressed: () => _updateStatus(ShoppingTripStatus.inProgress),
+              icon: const Icon(Icons.check),
+              onPressed: _updateTripDetails,
+              tooltip: "Save & Complete",
             ),
         ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Status Card
-            Card(
-              elevation: 2,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: _getStatusColor().withOpacity(0.1),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.shopping_cart,
-                        color: _getStatusColor(),
-                        size: 48,
-                      ),
+            // --- HEADER ---
+            Container(
+              color: Colors.white,
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                children: [
+                  CircleAvatar(
+                    radius: 40,
+                    backgroundColor: Colors.teal[50],
+                    child: Text(
+                      _trip.assignedToName.isNotEmpty ? _trip.assignedToName[0].toUpperCase() : '?',
+                      style: TextStyle(fontSize: 32, color: Colors.teal[800]),
                     ),
-                    const SizedBox(height: 16),
-                    Text(
-                      ShoppingTripStatus.getDisplayName(_trip.status),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    _trip.assignedToName,
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: _getStatusColor(_trip.status).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: _getStatusColor(_trip.status)),
+                    ),
+                    child: Text(
+                      _getStatusText(_trip.status).toUpperCase(),
                       style: TextStyle(
-                        fontSize: 24,
+                        color: _getStatusColor(_trip.status),
                         fontWeight: FontWeight.bold,
-                        color: _getStatusColor(),
+                        fontSize: 12,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Assigned to ${_trip.assignedToName}',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: Colors.grey[700],
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 16),
+            
+            const SizedBox(height: 20),
 
-            // Trip Information Card
-            Card(
-              elevation: 2,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Trip Information',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
+            // --- DETAILS FORM ---
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("Trip Details", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 16),
+                  
+                  _buildDetailRow(
+                    Icons.calendar_today,
+                    "Assigned Date",
+                    DateFormat('MMMM d, yyyy').format(_trip.assignedDate),
+                  ),
+                  
+                  const SizedBox(height: 16),
+
+                  // Total Spent
+                  if (canEdit && !isCompleted)
+                    CustomTextField(
+                      label: "Total Amount Spent (BDT)",
+                      controller: _amountController,
+                      keyboardType: TextInputType.number,
+                      prefixIcon: Icons.attach_money,
+                      hint: "0.00",
+                    )
+                  else
+                    _buildDetailRow(
+                      Icons.attach_money,
+                      "Total Spent",
+                      "${_trip.totalSpent.toStringAsFixed(0)} BDT",
+                      valueColor: Colors.teal[800],
+                      isBold: true,
+                    ),
+
+                  const SizedBox(height: 16),
+
+                  // Items Input Section
+                  if (canEdit && !isCompleted)
+                    TextField(
+                      controller: _itemsController,
+                      maxLines: 4,
+                      decoration: InputDecoration(
+                        labelText: "Items Purchased (One per line)",
+                        hintText: "Milk\nEggs\nBread",
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        filled: true,
+                        fillColor: Colors.white,
+                        prefixIcon: const Icon(Icons.list),
+                      ),
+                    )
+                  else
+                    _buildDetailRow(
+                      Icons.shopping_bag,
+                      "Items Purchased",
+                      _trip.itemsPurchased.isEmpty 
+                          ? "No items listed" 
+                          : "${_trip.itemsPurchased.length} items (${_trip.itemsPurchased.take(2).join(', ')}${_trip.itemsPurchased.length > 2 ? '...' : ''})",
+                    ),
+
+                  const SizedBox(height: 16),
+
+                  // Notes
+                  if (canEdit && !isCompleted)
+                    TextField(
+                      controller: _notesController,
+                      maxLines: 2,
+                      decoration: InputDecoration(
+                        labelText: "Notes",
+                        hintText: "Add details about the shopping...",
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        filled: true,
+                        fillColor: Colors.white,
+                      ),
+                    )
+                  else if (_trip.notes != null && _trip.notes!.isNotEmpty)
+                     _buildDetailRow(Icons.note, "Notes", _trip.notes!),
+
+                  const SizedBox(height: 30),
+
+                  // Actions
+                  if (_trip.status == 'completed' && _trip.reimbursementStatus != 'paid')
+                    CustomButton(
+                      text: "Mark as Reimbursed",
+                      icon: Icons.check_circle,
+                      onPressed: _isUpdating ? null : _markReimbursed,
+                      backgroundColor: Colors.green,
+                      isLoading: _isUpdating,
+                    ),
+
+                  // NEW: "Start Shopping" Button for Pending Trips
+                  if (canEdit && isPending)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: CustomButton(
+                        text: "Start Shopping",
+                        icon: Icons.shopping_cart_checkout,
+                        onPressed: _isUpdating ? null : _startShopping,
+                        isLoading: _isUpdating,
+                        backgroundColor: Colors.blueAccent, // Distinct color
                       ),
                     ),
-                    const SizedBox(height: 16),
-                    _InfoRow(
-                      icon: Icons.calendar_today,
-                      label: 'Assigned Date',
-                      value: DateFormat('MMM dd, yyyy').format(_trip.assignedDate),
+
+                  // Existing "Complete Trip" Button (Only show if Active)
+                  if (canEdit && !isCompleted && !isPending)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: CustomButton(
+                        text: "Complete Trip",
+                        onPressed: _isUpdating ? null : _updateTripDetails,
+                        isLoading: _isUpdating,
+                        backgroundColor: Colors.teal,
+                      ),
                     ),
-                    if (_trip.completedDate != null) ...[
-                      const Divider(height: 24),
-                      _InfoRow(
-                        icon: Icons.check_circle,
-                        label: 'Completed Date',
-                        value: DateFormat('MMM dd, yyyy').format(_trip.completedDate!),
-                      ),
-                    ],
-                    if (_trip.totalSpent > 0) ...[
-                      const Divider(height: 24),
-                      _InfoRow(
-                        icon: Icons.attach_money,
-                        label: 'Total Spent',
-                        value: '${_trip.totalSpent.toStringAsFixed(2)} BDT',
-                        valueColor: Colors.green,
-                      ),
-                    ],
-                    if (_trip.itemsPurchased.isNotEmpty) ...[
-                      const Divider(height: 24),
-                      _InfoRow(
-                        icon: Icons.shopping_basket,
-                        label: 'Items Purchased',
-                        value: '${_trip.itemsPurchased.length} items',
-                      ),
-                    ],
-                  ],
-                ),
+                    
+                  const SizedBox(height: 40),
+                ],
               ),
             ),
-            const SizedBox(height: 16),
-
-            // Reimbursement Status
-            if (_trip.isCompleted && _trip.totalSpent > 0) ...[
-              Card(
-                elevation: 2,
-                color: _trip.needsReimbursement ? Colors.orange[50] : Colors.green[50],
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            _trip.needsReimbursement ? Icons.payment : Icons.check_circle,
-                            color: _trip.needsReimbursement ? Colors.orange : Colors.green,
-                          ),
-                          const SizedBox(width: 12),
-                          Text(
-                            'Reimbursement Status',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              color: _trip.needsReimbursement ? Colors.orange[900] : Colors.green[900],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        _trip.needsReimbursement 
-                            ? 'Pending payment of ${_trip.totalSpent.toStringAsFixed(2)} BDT'
-                            : 'Reimbursement completed',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: _trip.needsReimbursement ? Colors.orange[800] : Colors.green[800],
-                        ),
-                      ),
-                      if (_trip.needsReimbursement && !isAssignedToMe) ...[
-                        const SizedBox(height: 12),
-                        ElevatedButton(
-                          onPressed: _isUpdating ? null : _markReimbursementPaid,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.green,
-                          ),
-                          child: const Text('Mark as Paid'),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-            ],
-
-            // Receipt Section
-            if (_trip.isInProgress || _trip.isCompleted) ...[
-              Card(
-                elevation: 2,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Receipt',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      if (_receiptURL != null) ...[
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: Image.network(
-                            _receiptURL!,
-                            height: 200,
-                            width: double.infinity,
-                            fit: BoxFit.cover,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                      ],
-                      if (isAssignedToMe && !_trip.isCompleted)
-                        OutlinedButton.icon(
-                          onPressed: _isUpdating ? null : _uploadReceipt,
-                          icon: const Icon(Icons.camera_alt),
-                          label: Text(_receiptURL == null ? 'Upload Receipt' : 'Change Receipt'),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-            ],
-
-            // Complete Trip Section
-            if (isAssignedToMe && _trip.isInProgress) ...[
-              Card(
-                elevation: 2,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Complete Shopping Trip',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: _amountController,
-                        decoration: const InputDecoration(
-                          labelText: 'Total Amount Spent *',
-                          hintText: 'Enter amount in BDT',
-                          prefixIcon: Icon(Icons.attach_money),
-                        ),
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      ),
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: _notesController,
-                        decoration: const InputDecoration(
-                          labelText: 'Notes (optional)',
-                          hintText: 'Add any additional notes...',
-                          prefixIcon: Icon(Icons.notes),
-                        ),
-                        maxLines: 3,
-                      ),
-                      const SizedBox(height: 16),
-                      ElevatedButton.icon(
-                        onPressed: _isUpdating ? null : _completeTrip,
-                        icon: _isUpdating
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : const Icon(Icons.check_circle),
-                        label: const Text('Complete Trip'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-
-            // Notes Section
-            if (_trip.notes != null && _trip.notes!.isNotEmpty) ...[
-              Card(
-                elevation: 2,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Notes',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        _trip.notes!,
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[700],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
           ],
         ),
       ),
     );
   }
-}
 
-class _InfoRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-  final Color? valueColor;
-
-  const _InfoRow({
-    required this.icon,
-    required this.label,
-    required this.value,
-    this.valueColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 20, color: Colors.grey[600]),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[600],
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: valueColor ?? Colors.black87,
-                ),
-              ),
-            ],
+  Widget _buildDetailRow(IconData icon, String label, String value, {Color? valueColor, bool isBold = false}) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.05),
+            blurRadius: 5,
+            offset: const Offset(0, 2),
           ),
-        ),
-      ],
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.grey[100],
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, color: Colors.grey[700], size: 20),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: valueColor ?? Colors.black87,
+                    fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status) {
+      case 'pending': return Colors.orange;
+      case 'in_progress': return Colors.blue;
+      case 'completed': return Colors.green;
+      default: return Colors.grey;
+    }
+  }
+
+  String _getStatusText(String status) {
+    switch (status) {
+      case 'pending': return "Pending";
+      case 'in_progress': return "In Progress";
+      case 'completed': return "Completed";
+      default: return "Unknown";
+    }
   }
 }

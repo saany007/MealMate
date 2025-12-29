@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
+
+// MODELS
 import '../models/settlement_report_model.dart';
 import '../models/expense_model.dart';
 import '../models/attendance_model.dart';
@@ -19,13 +21,32 @@ class SettlementService extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
 
+  // Set loading state
+  void _setLoading(bool value) {
+    if (_isLoading != value) {
+      _isLoading = value;
+      notifyListeners();
+    }
+  }
+
+  // Set error message
+  void _setError(String? message) {
+    _errorMessage = message;
+    notifyListeners();
+  }
+
+  // Clear error
+  void clearError() {
+    _errorMessage = null;
+    notifyListeners();
+  }
+
   // ==================== LOAD SETTLEMENT REPORTS ====================
 
   Future<void> loadSettlementReports(String systemId) async {
     try {
-      _isLoading = true;
-      _errorMessage = null;
-      notifyListeners();
+      _setLoading(true);
+      _setError(null);
 
       final QuerySnapshot snapshot = await _firestore
           .collection('settlementReports')
@@ -39,232 +60,229 @@ class SettlementService extends ChangeNotifier {
           .map((doc) => SettlementReportModel.fromDocument(doc))
           .toList();
 
-      _isLoading = false;
-      notifyListeners();
+      _setLoading(false);
     } catch (e) {
-      _isLoading = false;
-      _errorMessage = 'Failed to load settlement reports: ${e.toString()}';
-      notifyListeners();
+      _setLoading(false);
+      _setError('Failed to load reports: $e');
     }
   }
 
-  // ==================== GENERATE MONTHLY REPORT ====================
+  // ==================== GENERATE REPORT ====================
 
   Future<SettlementReportModel?> generateMonthlyReport({
     required String systemId,
     required DateTime month,
-    required MealSystemModel mealSystem,
+    MealSystemModel? mealSystem, 
   }) async {
     try {
-      _isLoading = true;
-      _errorMessage = null;
-      notifyListeners();
+      _setLoading(true);
+      _setError(null);
 
-      // Set to first day of month
-      final firstDay = DateTime(month.year, month.month, 1);
-      final lastDay = DateTime(month.year, month.month + 1, 0);
+      // Define start and end of the month
+      final startOfMonth = DateTime(month.year, month.month, 1);
+      final endOfMonth = DateTime(month.year, month.month + 1, 0, 23, 59, 59);
 
-      // Fetch expenses for the month
-      final expensesSnapshot = await _firestore
+      String formatDateForQuery(DateTime d) => 
+          "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
+
+      // 1. Fetch Expenses
+      final expenseSnapshot = await _firestore
           .collection('expenses')
           .doc(systemId)
           .collection('records')
-          .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(firstDay))
-          .where('date', isLessThanOrEqualTo: Timestamp.fromDate(lastDay))
+          .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfMonth))
+          .where('date', isLessThanOrEqualTo: Timestamp.fromDate(endOfMonth))
           .get();
 
-      final expenses = expensesSnapshot.docs
-          .map((doc) => ExpenseModel.fromDocument(doc))
-          .toList();
-
-      // Fetch attendance for the month
-      final attendanceSnapshot = await _firestore
+      // 2. Fetch Attendance
+      var attendanceSnapshot = await _firestore
           .collection('attendance')
           .doc(systemId)
-          .collection('daily')
-          .where(FieldPath.documentId, isGreaterThanOrEqualTo: _formatDate(firstDay))
-          .where(FieldPath.documentId, isLessThanOrEqualTo: _formatDate(lastDay))
+          .collection('days')
+          .where(FieldPath.documentId, isGreaterThanOrEqualTo: formatDateForQuery(startOfMonth))
+          .where(FieldPath.documentId, isLessThanOrEqualTo: formatDateForQuery(endOfMonth))
           .get();
 
-      // Calculate total meals and member-wise meal counts
-      Map<String, int> memberMealCounts = {};
+      // --- CALCULATIONS START ---
+
+      double totalExpenses = 0.0;
+      Map<String, double> categoryBreakdown = {};
+      Map<String, double> paidByMember = {}; 
+      List<String> expenseIds = [];
+
+      // Process Expenses using ExpenseModel
+      for (var doc in expenseSnapshot.docs) {
+        final expense = ExpenseModel.fromDocument(doc);
+
+        totalExpenses += expense.amount;
+        expenseIds.add(expense.expenseId);
+
+        categoryBreakdown[expense.category] = (categoryBreakdown[expense.category] ?? 0.0) + expense.amount;
+
+        if (expense.paidBy.isNotEmpty) {
+          paidByMember[expense.paidBy] = (paidByMember[expense.paidBy] ?? 0.0) + expense.amount;
+        }
+      }
+
+      // Process Attendance using AttendanceModel
       int totalMeals = 0;
+      Map<String, int> mealsEatenByMember = {};
 
       for (var doc in attendanceSnapshot.docs) {
-        final date = doc.id;
-        final data = doc.data();
-
-        // Count meals for each meal type (breakfast, lunch, dinner)
-        for (var mealType in ['breakfast', 'lunch', 'dinner']) {
-          if (data[mealType] != null) {
-            final mealData = data[mealType] as Map<String, dynamic>;
-            for (var userId in mealData.keys) {
-              final attendance = mealData[userId];
-              if (attendance['status'] == 'yes') {
-                memberMealCounts[userId] = (memberMealCounts[userId] ?? 0) + 1;
-                totalMeals++;
-              }
+        final dailyRecord = AttendanceModel.fromMap(doc.id, doc.data());
+        
+        void countMeals(Map<String, MealAttendance> slot) {
+          slot.forEach((uid, attendance) {
+            if (attendance.status == AttendanceStatus.yes) {
+              mealsEatenByMember[uid] = (mealsEatenByMember[uid] ?? 0) + 1;
+              totalMeals++;
             }
+          });
+        }
+
+        countMeals(dailyRecord.breakfast);
+        countMeals(dailyRecord.lunch);
+        countMeals(dailyRecord.dinner);
+      }
+
+      double costPerMeal = totalMeals > 0 ? totalExpenses / totalMeals : 0.0;
+
+      // Build Member Settlements
+      Map<String, MemberSettlement> memberSettlements = {};
+      Set<String> allUserIds = {...paidByMember.keys, ...mealsEatenByMember.keys};
+      
+      // Resolve User Names
+      Map<String, String> userNames = {};
+      if (mealSystem != null) {
+         mealSystem.members.forEach((uid, memberInfo) {
+           userNames[uid] = memberInfo.name;
+         });
+      } else {
+        final systemDoc = await _firestore.collection('mealSystems').doc(systemId).get();
+        if (systemDoc.exists) {
+          final systemData = systemDoc.data()!;
+          if (systemData['members'] != null) {
+            (systemData['members'] as Map<String, dynamic>).forEach((uid, mData) {
+              userNames[uid] = mData['name'] ?? 'Unknown';
+            });
           }
         }
       }
 
-      // Calculate total expenses
-      double totalExpenses = expenses.fold(0.0, (sum, e) => sum + e.amount);
-
-      // Calculate cost per meal
-      double costPerMeal = totalMeals > 0 ? totalExpenses / totalMeals : 0.0;
-
-      // Calculate member-wise paid amounts
-      Map<String, double> memberPaidAmounts = {};
-      for (var expense in expenses) {
-        memberPaidAmounts[expense.paidBy] = 
-            (memberPaidAmounts[expense.paidBy] ?? 0) + expense.amount;
-      }
-
-      // Calculate category breakdown
-      Map<String, double> categoryBreakdown = {};
-      for (var expense in expenses) {
-        categoryBreakdown[expense.category] = 
-            (categoryBreakdown[expense.category] ?? 0) + expense.amount;
-      }
-
-      // Find most expensive trip
-      String? mostExpensiveTrip;
-      double maxExpense = 0;
-      for (var expense in expenses) {
-        if (expense.amount > maxExpense) {
-          maxExpense = expense.amount;
-          mostExpensiveTrip = '${expense.paidByName} - ${expense.amount.toStringAsFixed(2)} BDT';
-        }
-      }
-
-      // Count cooking times (would need cooking rotation data)
-      Map<String, int> cookingCounts = {};
-
-      // Create member settlements
-      Map<String, MemberSettlement> memberSettlements = {};
-      
-      for (var entry in mealSystem.members.entries) {
-        final userId = entry.key;
-        final memberInfo = entry.value;
+      for (var uid in allUserIds) {
+        int meals = mealsEatenByMember[uid] ?? 0;
+        double paid = paidByMember[uid] ?? 0.0;
         
-        final mealsEaten = memberMealCounts[userId] ?? 0;
-        final totalOwed = mealsEaten * costPerMeal;
-        final totalPaid = memberPaidAmounts[userId] ?? 0.0;
-        final netBalance = totalPaid - totalOwed;
+        double totalOwed = meals * costPerMeal; 
+        double netBalance = totalOwed - paid; 
 
-        memberSettlements[userId] = MemberSettlement(
-          userId: userId,
-          userName: memberInfo.name,
-          mealsEaten: mealsEaten,
+        memberSettlements[uid] = MemberSettlement(
+          userId: uid,
+          userName: userNames[uid] ?? 'Member',
+          mealsEaten: meals,
           totalOwed: totalOwed,
-          totalPaid: totalPaid,
+          totalPaid: paid,
           netBalance: netBalance,
-          timesCooked: cookingCounts[userId] ?? 0,
+          timesCooked: 0,
+          payments: [],
         );
       }
 
-      // Create report
+      // --- CALCULATIONS END ---
+
       final reportId = _uuid.v4();
-      final report = SettlementReportModel(
+      final newReport = SettlementReportModel(
         reportId: reportId,
         systemId: systemId,
-        month: firstDay,
+        month: startOfMonth,
         generatedDate: DateTime.now(),
         totalExpenses: totalExpenses,
         totalMeals: totalMeals,
         costPerMeal: costPerMeal,
         memberSettlements: memberSettlements,
-        expenseIds: expenses.map((e) => e.expenseId).toList(),
+        expenseIds: expenseIds,
         categoryBreakdown: categoryBreakdown,
-        mostExpensiveTrip: mostExpensiveTrip,
-        status: SettlementStatus.draft,
+        mostExpensiveTrip: null,
+        mostActiveCook: null,
+        status: 'draft',
       );
 
-      // Save to Firestore
       await _firestore
           .collection('settlementReports')
           .doc(systemId)
           .collection('reports')
           .doc(reportId)
-          .set(report.toMap());
+          .set(newReport.toMap());
 
-      _reports.insert(0, report);
-      _isLoading = false;
-      notifyListeners();
+      _reports.insert(0, newReport);
+      
+      _setLoading(false);
+      return newReport;
 
-      return report;
     } catch (e) {
-      _isLoading = false;
-      _errorMessage = 'Failed to generate report: ${e.toString()}';
-      notifyListeners();
+      _setLoading(false);
+      _setError('Failed to generate report: $e');
       return null;
     }
   }
 
   // ==================== FINALIZE REPORT ====================
-
   Future<bool> finalizeReport(String systemId, String reportId) async {
-    try {
-      await _firestore
-          .collection('settlementReports')
-          .doc(systemId)
-          .collection('reports')
-          .doc(reportId)
-          .update({
-        'status': SettlementStatus.finalized,
-      });
-
-      final index = _reports.indexWhere((r) => r.reportId == reportId);
-      if (index != -1) {
-        _reports[index] = SettlementReportModel.fromMap({
-          ..._reports[index].toMap(),
-          'status': SettlementStatus.finalized,
-        });
-      }
-
-      notifyListeners();
-      return true;
-    } catch (e) {
-      _errorMessage = 'Failed to finalize report: ${e.toString()}';
-      notifyListeners();
-      return false;
-    }
+    return await updateReportStatus(systemId, reportId, 'finalized');
   }
 
-  // ==================== MARK AS PAID ====================
+  // ==================== UPDATE REPORT STATUS ====================
 
-  Future<bool> markReportAsPaid(String systemId, String reportId) async {
+  Future<bool> updateReportStatus(String systemId, String reportId, String status) async {
     try {
+      _setLoading(true);
+      
       await _firestore
           .collection('settlementReports')
           .doc(systemId)
           .collection('reports')
           .doc(reportId)
-          .update({
-        'status': SettlementStatus.paid,
-      });
+          .update({'status': status});
 
       final index = _reports.indexWhere((r) => r.reportId == reportId);
       if (index != -1) {
-        _reports[index] = SettlementReportModel.fromMap({
-          ..._reports[index].toMap(),
-          'status': SettlementStatus.paid,
-        });
+        final old = _reports[index];
+        _reports[index] = SettlementReportModel(
+          reportId: old.reportId,
+          systemId: old.systemId,
+          month: old.month,
+          generatedDate: old.generatedDate,
+          totalExpenses: old.totalExpenses,
+          totalMeals: old.totalMeals,
+          costPerMeal: old.costPerMeal,
+          memberSettlements: old.memberSettlements,
+          expenseIds: old.expenseIds,
+          categoryBreakdown: old.categoryBreakdown,
+          mostExpensiveTrip: old.mostExpensiveTrip,
+          mostActiveCook: old.mostActiveCook,
+          status: status, 
+        );
+        notifyListeners();
       }
 
-      notifyListeners();
+      if (status == 'finalized') {
+        await _createNotification(
+          systemId,
+          'Monthly Report Ready',
+          'The settlement report has been finalized. Please check your dues.',
+        );
+      }
+      
+      _setLoading(false);
       return true;
     } catch (e) {
-      _errorMessage = 'Failed to mark as paid: ${e.toString()}';
-      notifyListeners();
+      _setLoading(false);
+      _setError('Failed to update status: $e');
       return false;
     }
   }
 
   // ==================== ADD PAYMENT RECORD ====================
-
   Future<bool> addPaymentRecord({
     required String systemId,
     required String reportId,
@@ -273,87 +291,224 @@ class SettlementService extends ChangeNotifier {
     required String method,
     String? transactionId,
   }) async {
+    return await markMemberAsPaid(systemId, reportId, userId, amount, method, transactionId);
+  }
+
+  Future<bool> markMemberAsPaid(
+    String systemId, 
+    String reportId, 
+    String userId, 
+    double amount,
+    String method,
+    String? transactionId,
+  ) async {
     try {
+      _setLoading(true);
+
+      final reportIndex = _reports.indexWhere((r) => r.reportId == reportId);
+      if (reportIndex == -1) return false;
+      
+      final report = _reports[reportIndex];
+      final memberSettlement = report.memberSettlements[userId];
+      
+      if (memberSettlement == null) return false;
+
       final paymentId = _uuid.v4();
+      
+      // Use PaymentRecord from imported model
       final payment = PaymentRecord(
         paymentId: paymentId,
         amount: amount,
         date: DateTime.now(),
         method: method,
         transactionId: transactionId,
-        status: 'completed',
       );
 
-      // Get the report
-      final reportDoc = await _firestore
-          .collection('settlementReports')
-          .doc(systemId)
-          .collection('reports')
-          .doc(reportId)
-          .get();
+      // Add to list
+      List<PaymentRecord> currentPayments = List.from(memberSettlement.payments);
+      currentPayments.add(payment);
 
-      if (!reportDoc.exists) return false;
-
-      final report = SettlementReportModel.fromDocument(reportDoc);
-      
-      // Update member settlement
-      final memberSettlement = report.memberSettlements[userId];
-      if (memberSettlement == null) return false;
-
-      final updatedPayments = [...memberSettlement.payments, payment];
       final updatedSettlement = MemberSettlement(
         userId: memberSettlement.userId,
         userName: memberSettlement.userName,
         mealsEaten: memberSettlement.mealsEaten,
         totalOwed: memberSettlement.totalOwed,
-        totalPaid: memberSettlement.totalPaid,
-        netBalance: memberSettlement.netBalance,
+        totalPaid: memberSettlement.totalPaid + amount,
+        netBalance: memberSettlement.netBalance - amount,
         timesCooked: memberSettlement.timesCooked,
-        payments: updatedPayments,
+        payments: currentPayments,
       );
 
-      // Update in Firestore
+      // Save Payment Record
+      await _firestore
+          .collection('payments')
+          .doc(systemId)
+          .collection('report_payments')
+          .doc(paymentId)
+          .set(payment.toMap());
+
+      // Update Report
+      Map<String, dynamic> updatedMembersMap = {};
+      report.memberSettlements.forEach((key, value) {
+        if (key == userId) {
+          updatedMembersMap[key] = updatedSettlement.toMap();
+        } else {
+          updatedMembersMap[key] = value.toMap();
+        }
+      });
+
       await _firestore
           .collection('settlementReports')
           .doc(systemId)
           .collection('reports')
           .doc(reportId)
-          .update({
-        'memberSettlements.$userId': updatedSettlement.toMap(),
-      });
+          .update({'memberSettlements': updatedMembersMap});
 
-      // Update local list
-      final index = _reports.indexWhere((r) => r.reportId == reportId);
-      if (index != -1) {
-        final updatedSettlements = Map<String, MemberSettlement>.from(
-          _reports[index].memberSettlements,
-        );
-        updatedSettlements[userId] = updatedSettlement;
-
-        _reports[index] = SettlementReportModel(
-          reportId: _reports[index].reportId,
-          systemId: _reports[index].systemId,
-          month: _reports[index].month,
-          generatedDate: _reports[index].generatedDate,
-          totalExpenses: _reports[index].totalExpenses,
-          totalMeals: _reports[index].totalMeals,
-          costPerMeal: _reports[index].costPerMeal,
-          memberSettlements: updatedSettlements,
-          expenseIds: _reports[index].expenseIds,
-          categoryBreakdown: _reports[index].categoryBreakdown,
-          mostExpensiveTrip: _reports[index].mostExpensiveTrip,
-          mostActiveCook: _reports[index].mostActiveCook,
-          status: _reports[index].status,
-        );
-      }
-
+      // Update Local State
+      Map<String, MemberSettlement> newSettlements = Map.from(report.memberSettlements);
+      newSettlements[userId] = updatedSettlement;
+      
+      _reports[reportIndex] = SettlementReportModel(
+        reportId: report.reportId,
+        systemId: report.systemId,
+        month: report.month,
+        generatedDate: report.generatedDate,
+        totalExpenses: report.totalExpenses,
+        totalMeals: report.totalMeals,
+        costPerMeal: report.costPerMeal,
+        memberSettlements: newSettlements,
+        expenseIds: report.expenseIds,
+        categoryBreakdown: report.categoryBreakdown,
+        mostExpensiveTrip: report.mostExpensiveTrip,
+        mostActiveCook: report.mostActiveCook,
+        status: report.status,
+      );
+      
+      _setLoading(false);
       notifyListeners();
       return true;
     } catch (e) {
-      _errorMessage = 'Failed to add payment: ${e.toString()}';
-      notifyListeners();
+      _setLoading(false);
+      _setError('Failed to mark payment: $e');
       return false;
     }
+  }
+
+  // ==================== CALCULATE SETTLEMENT TRANSACTIONS ====================
+  // Generates the "Who pays Whom" list (Simplified Algorithm)
+  List<SettlementTransaction> calculateSettlementTransactions(SettlementReportModel report) {
+    List<SettlementTransaction> transactions = [];
+    
+    // 1. Separate debtors (owe money) and creditors (receive money)
+    List<MemberSettlement> debtors = [];
+    List<MemberSettlement> creditors = [];
+
+    report.memberSettlements.forEach((_, member) {
+      if (member.netBalance > 0.1) { // Positive balance = Owe
+        debtors.add(member);
+      } else if (member.netBalance < -0.1) { // Negative balance = Receive
+        creditors.add(member);
+      }
+    });
+
+    // Sort by amount (descending) to settle largest debts first
+    debtors.sort((a, b) => b.netBalance.compareTo(a.netBalance));
+    creditors.sort((a, b) => a.netBalance.compareTo(b.netBalance)); // Most negative first
+
+    int debtorIdx = 0;
+    int creditorIdx = 0;
+
+    // Use mutable tracking for calculation
+    List<double> debtorAmounts = debtors.map((d) => d.netBalance).toList();
+    List<double> creditorAmounts = creditors.map((c) => c.netBalance.abs()).toList();
+
+    while (debtorIdx < debtors.length && creditorIdx < creditors.length) {
+      double amount = 0;
+      double debt = debtorAmounts[debtorIdx];
+      double credit = creditorAmounts[creditorIdx];
+
+      if (debt < credit) {
+        amount = debt;
+        creditorAmounts[creditorIdx] -= amount;
+        debtorAmounts[debtorIdx] = 0;
+        debtorIdx++;
+      } else {
+        amount = credit;
+        debtorAmounts[debtorIdx] -= amount;
+        creditorAmounts[creditorIdx] = 0;
+        creditorIdx++;
+      }
+
+      if (amount > 0.01) {
+        transactions.add(SettlementTransaction(
+          fromUserId: debtors[debtorIdx > 0 && debtorAmounts[debtorIdx-1] == 0 ? debtorIdx-1 : debtorIdx].userId,
+          fromUserName: debtors[debtorIdx > 0 && debtorAmounts[debtorIdx-1] == 0 ? debtorIdx-1 : debtorIdx].userName,
+          toUserId: creditors[creditorIdx > 0 && creditorAmounts[creditorIdx-1] == 0 ? creditorIdx-1 : creditorIdx].userId,
+          toUserName: creditors[creditorIdx > 0 && creditorAmounts[creditorIdx-1] == 0 ? creditorIdx-1 : creditorIdx].userName,
+          amount: amount,
+        ));
+      }
+    }
+
+    return transactions;
+  }
+
+  // ==================== SEND REMINDERS ====================
+
+  Future<bool> sendReminders(String systemId, String reportId) async {
+    try {
+      final report = _reports.firstWhere((r) => r.reportId == reportId);
+      
+      List<String> usersToRemind = [];
+      report.memberSettlements.forEach((uid, settlement) {
+        if (settlement.netBalance > 10) { 
+          usersToRemind.add(uid);
+        }
+      });
+
+      if (usersToRemind.isEmpty) return true;
+
+      await _createNotification(
+        systemId, 
+        'Payment Reminder', 
+        'Reminder sent to ${usersToRemind.length} members to clear their dues.'
+      );
+
+      return true;
+    } catch (e) {
+      _setError('Failed to send reminders: $e');
+      return false;
+    }
+  }
+
+  // ==================== CALCULATE STATISTICS ====================
+
+  ReportStatistics calculateStatistics(SettlementReportModel report) {
+    final daysInMonth = DateTime(report.month.year, report.month.month + 1, 0).day;
+
+    final avgExpensePerDay = report.totalExpenses / daysInMonth;
+    final avgMealsPerDay = report.totalMeals / daysInMonth;
+
+    String highestCategory = 'None';
+    double highestAmount = 0;
+
+    if (report.categoryBreakdown.isNotEmpty) {
+      report.categoryBreakdown.forEach((key, value) {
+        if (value > highestAmount) {
+          highestAmount = value;
+          highestCategory = key;
+        }
+      });
+    }
+
+    return ReportStatistics(
+      averageExpensePerDay: avgExpensePerDay,
+      averageMealsPerDay: avgMealsPerDay,
+      highestExpenseCategory: highestCategory,
+      highestCategoryAmount: highestAmount,
+      totalShoppingTrips: 0, 
+      averageShoppingAmount: 0, 
+    );
   }
 
   // ==================== DELETE REPORT ====================
@@ -366,148 +521,29 @@ class SettlementService extends ChangeNotifier {
           .collection('reports')
           .doc(reportId)
           .delete();
-
+      
       _reports.removeWhere((r) => r.reportId == reportId);
       notifyListeners();
       return true;
     } catch (e) {
-      _errorMessage = 'Failed to delete report: ${e.toString()}';
-      notifyListeners();
+      _setError('Failed to delete report: $e');
       return false;
     }
   }
 
-  // ==================== CALCULATE SETTLEMENT TRANSACTIONS ====================
-
-  List<SettlementTransaction> calculateSettlementTransactions(
-    SettlementReportModel report,
-  ) {
-    List<SettlementTransaction> transactions = [];
-
-    // Get members who owe and who should receive
-    final debtors = report.membersWhoOwe.toList();
-    final creditors = report.membersToReceive.toList();
-
-    int i = 0, j = 0;
-
-    while (i < debtors.length && j < creditors.length) {
-      final debtor = debtors[i];
-      final creditor = creditors[j];
-
-      final debtAmount = debtor.absoluteBalance;
-      final creditAmount = creditor.absoluteBalance;
-
-      final settleAmount = debtAmount < creditAmount ? debtAmount : creditAmount;
-
-      transactions.add(SettlementTransaction(
-        fromUserId: debtor.userId,
-        fromUserName: debtor.userName,
-        toUserId: creditor.userId,
-        toUserName: creditor.userName,
-        amount: settleAmount,
-      ));
-
-      if (debtAmount < creditAmount) {
-        i++;
-      } else if (debtAmount > creditAmount) {
-        j++;
-      } else {
-        i++;
-        j++;
-      }
-    }
-
-    return transactions;
-  }
-
-  // ==================== STREAM REPORTS ====================
-
-  Stream<List<SettlementReportModel>> streamSettlementReports(String systemId) {
-    return _firestore
-        .collection('settlementReports')
-        .doc(systemId)
-        .collection('reports')
-        .orderBy('month', descending: true)
-        .snapshots()
-        .map((snapshot) {
-      return snapshot.docs
-          .map((doc) => SettlementReportModel.fromDocument(doc))
-          .toList();
-    });
-  }
-
-  // ==================== GET REPORT BY MONTH ====================
-
-  Future<SettlementReportModel?> getReportByMonth(
-    String systemId,
-    DateTime month,
-  ) async {
-    try {
-      final firstDay = DateTime(month.year, month.month, 1);
-      
-      final querySnapshot = await _firestore
-          .collection('settlementReports')
-          .doc(systemId)
-          .collection('reports')
-          .where('month', isEqualTo: Timestamp.fromDate(firstDay))
-          .limit(1)
-          .get();
-
-      if (querySnapshot.docs.isNotEmpty) {
-        return SettlementReportModel.fromDocument(querySnapshot.docs.first);
-      }
-      return null;
-    } catch (e) {
-      _errorMessage = 'Failed to get report: ${e.toString()}';
-      return null;
-    }
-  }
-
-  // ==================== CALCULATE STATISTICS ====================
-
-  ReportStatistics calculateStatistics(SettlementReportModel report) {
-    final daysInMonth = DateTime(
-      report.month.year,
-      report.month.month + 1,
-      0,
-    ).day;
-
-    final avgExpensePerDay = report.totalExpenses / daysInMonth;
-    final avgMealsPerDay = report.totalMeals / daysInMonth;
-
-    // Find highest expense category
-    String highestCategory = 'groceries';
-    double highestAmount = 0;
-
-    for (var entry in report.categoryBreakdown.entries) {
-      if (entry.value > highestAmount) {
-        highestAmount = entry.value;
-        highestCategory = entry.key;
-      }
-    }
-
-    return ReportStatistics(
-      averageExpensePerDay: avgExpensePerDay,
-      averageMealsPerDay: avgMealsPerDay,
-      highestExpenseCategory: highestCategory,
-      highestCategoryAmount: highestAmount,
-      totalShoppingTrips: 0, // Would need shopping trip data
-      averageShoppingAmount: 0,
-    );
-  }
-
   // ==================== HELPER METHODS ====================
 
-  String _formatDate(DateTime date) {
-    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-  }
-
-  // ==================== CLEAR DATA ====================
-
-  void clearData() {
-    _reports = [];
-    _isLoading = false;
-    _errorMessage = null;
-    notifyListeners();
+  Future<void> _createNotification(String systemId, String title, String body) async {
+    try {
+      await _firestore.collection('notifications').add({
+        'systemId': systemId,
+        'title': title,
+        'body': body,
+        'timestamp': FieldValue.serverTimestamp(),
+        'read': false,
+      });
+    } catch (e) {
+      print('Failed to create notification: $e');
+    }
   }
 }

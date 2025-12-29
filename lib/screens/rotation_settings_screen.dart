@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import '../services/auth_service.dart';
 import '../services/cooking_rotation_service.dart';
+import '../services/meal_system_service.dart'; 
 import '../models/cooking_rotation_model.dart';
 import '../widgets/custom_button.dart';
 
@@ -45,32 +46,63 @@ class _RotationSettingsScreenState extends State<RotationSettingsScreen>
   }
 
   Future<void> _loadSettings() async {
+    if (!mounted) return;
+    
     final authService = Provider.of<AuthService>(context, listen: false);
     final rotationService = Provider.of<CookingRotationService>(context, listen: false);
+    final systemService = Provider.of<MealSystemService>(context, listen: false); 
+    
     final systemId = authService.userModel?.currentMealSystemId;
     final userId = authService.userModel?.userId;
 
     if (systemId == null || userId == null) return;
 
-    final rotation = await rotationService.getRotation(systemId);
+    try {
+      // STEP 1: Ensure we have the latest member list from the Meal System
+      if (systemService.currentMealSystem == null) {
+        await systemService.loadMealSystem(systemId);
+      }
 
-    if (rotation != null && mounted) {
-      setState(() {
-        _selectedFrequency = rotation.settings.frequency;
-        _selectedMeals = List.from(rotation.settings.mealsToRotate);
-        _autoAssign = rotation.settings.autoAssign;
-        _daysAhead = rotation.settings.daysAhead;
-        _respectPreferences = rotation.settings.respectPreferences;
+      // STEP 2: Sync Members
+      if (systemService.currentMealSystem != null) {
+        await rotationService.syncSystemMembers(
+          systemId: systemId,
+          mealSystem: systemService.currentMealSystem!,
+        );
+      }
 
-        final memberInfo = rotation.members[userId];
-        if (memberInfo != null) {
-          _myPreferredDays = List.from(memberInfo.preferredDays);
-          _isActive = memberInfo.isActive;
-          _inactiveUntil = memberInfo.inactiveUntil;
-        }
+      // STEP 3: Load the rotation data
+      final rotation = await rotationService.getRotation(systemId);
 
-        _isLoading = false;
-      });
+      if (rotation != null && mounted) {
+        setState(() {
+          // Load System Settings
+          _selectedFrequency = rotation.settings.frequency;
+          _selectedMeals = List.from(rotation.settings.mealsToRotate);
+          _autoAssign = rotation.settings.autoAssign;
+          _daysAhead = rotation.settings.daysAhead;
+          _respectPreferences = rotation.settings.respectPreferences;
+
+          // Load My Preferences
+          final memberInfo = rotation.members[userId];
+          if (memberInfo != null) {
+            _myPreferredDays = List.from(memberInfo.preferredDays);
+            _isActive = memberInfo.isActive;
+            _inactiveUntil = memberInfo.inactiveUntil;
+          } else {
+            // Should not happen after sync, but safe defaults just in case
+            _myPreferredDays = [];
+            _isActive = true;
+          }
+
+          _isLoading = false;
+        });
+      } else {
+        if (mounted) setState(() => _isLoading = false);
+      }
+    } catch (e) {
+      print("Error loading settings: $e");
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -154,8 +186,14 @@ class _RotationSettingsScreenState extends State<RotationSettingsScreen>
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
         title: const Text('Rotation Settings'),
+        // FIX START: Added Background Color
+        backgroundColor: const Color(0xFF16A34A),
         bottom: TabBar(
           controller: _tabController,
+          // FIX START: Added Text Colors for Visibility
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.white70,
+          // FIX END
           indicatorColor: Colors.white,
           tabs: const [
             Tab(text: 'System Settings'),

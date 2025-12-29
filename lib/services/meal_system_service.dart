@@ -1,12 +1,14 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:uuid/uuid.dart';
 import '../models/meal_system_model.dart';
 import '../models/user_model.dart';
 import 'database_service.dart';
-import 'package:uuid/uuid.dart';
 
 class MealSystemService extends ChangeNotifier {
   final DatabaseService _databaseService = DatabaseService();
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final Uuid _uuid = const Uuid();
   
   MealSystemModel? _currentMealSystem;
@@ -20,8 +22,10 @@ class MealSystemService extends ChangeNotifier {
 
   // Set loading state
   void _setLoading(bool value) {
-    _isLoading = value;
-    notifyListeners();
+    if (_isLoading != value) {
+      _isLoading = value;
+      notifyListeners();
+    }
   }
 
   // Set error message
@@ -105,6 +109,11 @@ class MealSystemService extends ChangeNotifier {
       // Save to database
       await _databaseService.createMealSystem(mealSystem);
 
+      // Update user's current system
+      await _firestore.collection('users').doc(ownerId).update({
+        'currentMealSystemId': systemId,
+      });
+
       _currentMealSystem = mealSystem;
       _setLoading(false);
       return mealSystem;
@@ -136,6 +145,12 @@ class MealSystemService extends ChangeNotifier {
 
       // Check if user is already a member
       if (mealSystem.isMember(userId)) {
+        // Ensure user is linked even if already member
+        await _firestore.collection('users').doc(userId).update({
+          'currentMealSystemId': mealSystem.systemId,
+        });
+        
+        _currentMealSystem = mealSystem;
         _setError('You are already a member of this system.');
         _setLoading(false);
         return mealSystem;
@@ -157,11 +172,20 @@ class MealSystemService extends ChangeNotifier {
         memberInfo,
       );
 
+      // Update user's current system
+      await _firestore.collection('users').doc(userId).update({
+        'currentMealSystemId': mealSystem.systemId,
+      });
+
       // Update local meal system
       Map<String, MemberInfo> updatedMembers = Map.from(mealSystem.members);
       updatedMembers[userId] = memberInfo;
       
       _currentMealSystem = mealSystem.copyWith(members: updatedMembers);
+      
+      // Calculate initial stats
+      await refreshSystemStats(mealSystem.systemId);
+      
       _setLoading(false);
       return _currentMealSystem;
     } catch (e) {
@@ -186,6 +210,10 @@ class MealSystemService extends ChangeNotifier {
       }
 
       _currentMealSystem = mealSystem;
+
+      // CRITICAL FIX: Refresh stats immediately so dashboard isn't empty
+      await refreshSystemStats(systemId);
+
       _setLoading(false);
       return mealSystem;
     } catch (e) {
@@ -251,11 +279,20 @@ class MealSystemService extends ChangeNotifier {
         userId,
       );
 
+      // Remove system ID from user
+      await _firestore.collection('users').doc(userId).update({
+        'currentMealSystemId': FieldValue.delete(),
+      });
+
       // Update local state
       Map<String, MemberInfo> updatedMembers = Map.from(_currentMealSystem!.members);
       updatedMembers.remove(userId);
       
       _currentMealSystem = _currentMealSystem!.copyWith(members: updatedMembers);
+      
+      // Recalculate stats after removal
+      await refreshSystemStats(_currentMealSystem!.systemId);
+      
       _setLoading(false);
       notifyListeners();
       return true;
@@ -304,6 +341,11 @@ class MealSystemService extends ChangeNotifier {
       _setLoading(true);
 
       await _databaseService.deleteMealSystem(_currentMealSystem!.systemId);
+      
+      // Update owner profile
+      await _firestore.collection('users').doc(userId).update({
+        'currentMealSystemId': FieldValue.delete(),
+      });
 
       _currentMealSystem = null;
       _setLoading(false);
@@ -336,7 +378,7 @@ class MealSystemService extends ChangeNotifier {
     }
   }
 
-  // Update member meal count and owed amount
+  // Update member meal count and owed amount (Manual override)
   Future<bool> updateMemberStats({
     required String userId,
     int? mealsEaten,
@@ -396,5 +438,111 @@ class MealSystemService extends ChangeNotifier {
   void clearCurrentMealSystem() {
     _currentMealSystem = null;
     notifyListeners();
+  }
+
+  // ==============================================================================
+  // CRITICAL FIX: Live Calculation of Stats (Fixes "0" Balance on Dashboard)
+  // ==============================================================================
+  Future<void> refreshSystemStats(String systemId) async {
+    try {
+      final now = DateTime.now();
+      // Calculate for the current month
+      final startOfMonth = DateTime(now.year, now.month, 1);
+      final endOfMonth = DateTime(now.year, now.month + 1, 0, 23, 59, 59);
+
+      // Helper for date formatting matches Firestore doc IDs usually
+      String formatDate(DateTime d) => 
+          "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
+
+      // 1. Fetch Attendance (from 'days' or 'daily' subcollection based on usage)
+      // Standardizing to 'days' based on other file snippets, but checking 'daily' as fallback
+      var attendanceSnapshot = await _firestore
+          .collection('attendance')
+          .doc(systemId)
+          .collection('days') 
+          .where(FieldPath.documentId, isGreaterThanOrEqualTo: formatDate(startOfMonth))
+          .where(FieldPath.documentId, isLessThanOrEqualTo: formatDate(endOfMonth))
+          .get();
+
+      // 2. Fetch Expenses for current month
+      final expenseSnapshot = await _firestore
+          .collection('expenses')
+          .doc(systemId)
+          .collection('records')
+          .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfMonth))
+          .where('date', isLessThanOrEqualTo: Timestamp.fromDate(endOfMonth))
+          .get();
+
+      // 3. Count Meals Eaten per Member
+      Map<String, int> mealsMap = {};
+      int totalSystemMeals = 0;
+
+      for (var doc in attendanceSnapshot.docs) {
+        final data = doc.data();
+        // Check breakfast, lunch, dinner maps
+        ['breakfast', 'lunch', 'dinner'].forEach((mealType) {
+          if (data[mealType] != null) {
+            final Map<String, dynamic> mealMap = data[mealType];
+            mealMap.forEach((uid, statusData) {
+              // 'status' is stored inside the map value
+              if (statusData['status'] == 'yes') {
+                mealsMap[uid] = (mealsMap[uid] ?? 0) + 1;
+                totalSystemMeals++;
+              }
+            });
+          }
+        });
+      }
+
+      // 4. Calculate Financials
+      double totalExpenses = 0;
+      Map<String, double> paidByMember = {};
+
+      for (var doc in expenseSnapshot.docs) {
+        final data = doc.data();
+        final amount = (data['amount'] ?? 0.0).toDouble();
+        final payerId = data['paidBy'] as String;
+        
+        totalExpenses += amount;
+        paidByMember[payerId] = (paidByMember[payerId] ?? 0) + amount;
+      }
+
+      // Cost Per Meal = Total Expenses / Total Meals
+      double costPerMeal = totalSystemMeals > 0 ? totalExpenses / totalSystemMeals : 0.0;
+
+      // 5. Update Members Logic
+      if (_currentMealSystem != null) {
+        Map<String, MemberInfo> updatedMembers = {};
+        
+        _currentMealSystem!.members.forEach((uid, member) {
+          int myMeals = mealsMap[uid] ?? 0;
+          double myPaid = paidByMember[uid] ?? 0.0;
+
+          // Formula: (Meals I Ate * Cost Per Meal) - (Amount I Paid)
+          // Result: Positive = I Owe money. Negative = System Owes me.
+          double myShare = myMeals * costPerMeal;
+          double balance = myShare - myPaid;
+
+          updatedMembers[uid] = member.copyWith(
+            totalMealsEaten: myMeals,
+            totalOwed: balance,
+          );
+        });
+
+        // Write updates to Firestore 'mealSystems' collection
+        await _firestore.collection('mealSystems').doc(systemId).update({
+          'members': updatedMembers.map((k, v) => MapEntry(k, v.toMap())),
+        });
+
+        // Update Local State to reflect changes immediately
+        _currentMealSystem = _currentMealSystem!.copyWith(members: updatedMembers);
+        
+        notifyListeners();
+      }
+
+    } catch (e) {
+      print("System Stats Refresh Error: $e");
+      // We don't throw here to avoid blocking the user flow, just log error
+    }
   }
 }

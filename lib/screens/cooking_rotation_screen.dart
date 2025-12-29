@@ -237,9 +237,11 @@ class _CookingRotationScreenState extends State<CookingRotationScreen>
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
         title: const Text('Cooking Rotation'),
+        // FIX START: Applied Vibrant Green background and White Text
+        backgroundColor: const Color(0xFF16A34A),
         actions: [
           IconButton(
-            icon: const Icon(Icons.settings),
+            icon: const Icon(Icons.settings, color: Colors.white),
             onPressed: () {
               Navigator.pushNamed(context, '/rotation-settings');
             },
@@ -247,6 +249,8 @@ class _CookingRotationScreenState extends State<CookingRotationScreen>
         ],
         bottom: TabBar(
           controller: _tabController,
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.white70,
           indicatorColor: Colors.white,
           tabs: const [
             Tab(text: 'Schedule'),
@@ -254,6 +258,7 @@ class _CookingRotationScreenState extends State<CookingRotationScreen>
             Tab(text: 'Statistics'),
           ],
         ),
+        // FIX END
       ),
       body: StreamBuilder<CookingRotationModel?>(
         stream: Provider.of<CookingRotationService>(context).streamRotation(systemId),

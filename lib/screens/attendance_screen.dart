@@ -5,7 +5,7 @@ import 'package:intl/intl.dart';
 import '../services/auth_service.dart';
 import '../services/attendance_service.dart';
 import '../models/attendance_model.dart';
-import '../widgets/custom_button.dart';
+import '../widgets/custom_button.dart'; 
 
 class AttendanceScreen extends StatefulWidget {
   const AttendanceScreen({super.key});
@@ -14,9 +14,18 @@ class AttendanceScreen extends StatefulWidget {
   State<AttendanceScreen> createState() => _AttendanceScreenState();
 }
 
-class _AttendanceScreenState extends State<AttendanceScreen> {
-  final String _todayDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
+class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerProviderStateMixin {
+  // Use today's date for default view
+  final DateTime _selectedDate = DateTime.now();
+  late String _formattedDate;
 
+  @override
+  void initState() {
+    super.initState();
+    _formattedDate = DateFormat('yyyy-MM-dd').format(_selectedDate);
+  }
+
+  // Mark attendance using the service
   Future<void> _markAttendance(
     String systemId,
     String mealType,
@@ -24,40 +33,27 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   ) async {
     final authService = Provider.of<AuthService>(context, listen: false);
     final attendanceService = Provider.of<AttendanceService>(context, listen: false);
+    final user = authService.userModel;
 
+    if (user == null) return;
+
+    // Call the transaction-based method
     final success = await attendanceService.markAttendance(
       systemId: systemId,
-      date: _todayDate,
+      date: _formattedDate,
       mealType: mealType,
-      userId: authService.userModel!.userId,
-      userName: authService.userModel!.name,
+      userId: user.userId,
+      userName: user.name,
       status: status,
     );
 
     if (success && mounted) {
+      // Optional: Show a subtle toast or snackbar
+      // We rely on the StreamBuilder to update the UI instantly
+    } else if (mounted) {
       Fluttertoast.showToast(
-        msg: 'Attendance marked for ${mealType.toLowerCase()}',
-        backgroundColor: Colors.green,
-        textColor: Colors.white,
-      );
-    }
-  }
-
-  Future<void> _quickCheckInAll(String systemId, String status) async {
-    final authService = Provider.of<AuthService>(context, listen: false);
-    final attendanceService = Provider.of<AttendanceService>(context, listen: false);
-
-    final success = await attendanceService.quickCheckInAllMeals(
-      systemId: systemId,
-      userId: authService.userModel!.userId,
-      userName: authService.userModel!.name,
-      status: status,
-    );
-
-    if (success && mounted) {
-      Fluttertoast.showToast(
-        msg: 'Checked in for all meals!',
-        backgroundColor: Colors.green,
+        msg: attendanceService.errorMessage ?? 'Failed to update',
+        backgroundColor: Colors.red,
         textColor: Colors.white,
       );
     }
@@ -66,283 +62,283 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   @override
   Widget build(BuildContext context) {
     final authService = Provider.of<AuthService>(context);
+    final attendanceService = Provider.of<AttendanceService>(context);
     final systemId = authService.userModel?.currentMealSystemId;
+    final userId = authService.userModel?.userId;
 
-    if (systemId == null) {
-      return const Scaffold(
-        body: Center(child: Text('No meal system found')),
+    // Safety check
+    if (systemId == null || userId == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Attendance')),
+        body: const Center(child: Text('You are not part of a meal system.')),
       );
     }
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        title: const Text('Meal Attendance'),
+        title: const Text('Attendance'),
+        centerTitle: true,
         actions: [
           IconButton(
-            icon: const Icon(Icons.history),
+            icon: const Icon(Icons.history_rounded),
+            tooltip: 'View History',
             onPressed: () {
               Navigator.pushNamed(context, '/attendance-history');
             },
           ),
         ],
       ),
-      body: StreamBuilder<AttendanceModel?>(
-        stream: Provider.of<AttendanceService>(context)
-            .streamAttendanceForDate(systemId: systemId, date: _todayDate),
-        builder: (context, snapshot) {
-          final attendance = snapshot.data;
-          final userId = authService.userModel!.userId;
-
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Date Card
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF22C55E), Color(0xFF16A34A)],
-                    ),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    children: [
-                      const Icon(
-                        Icons.calendar_today,
-                        color: Colors.white,
-                        size: 32,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        DateFormat('EEEE, MMMM d').format(DateTime.now()),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      const Text(
-                        'Mark your meal attendance',
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 24),
-
-                // Quick Actions
-                const Text(
-                  'Quick Actions',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _QuickActionButton(
-                        label: 'All Yes',
-                        icon: Icons.check_circle,
-                        color: Colors.green,
-                        onPressed: () => _quickCheckInAll(systemId, AttendanceStatus.yes),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _QuickActionButton(
-                        label: 'All No',
-                        icon: Icons.cancel,
-                        color: Colors.red,
-                        onPressed: () => _quickCheckInAll(systemId, AttendanceStatus.no),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-
-                // Breakfast
-                _MealCard(
-                  mealType: 'breakfast',
-                  icon: Icons.wb_twilight,
-                  title: 'Breakfast',
-                  currentStatus: attendance?.getUserStatus(userId, 'breakfast'),
-                  attendeeCount: attendance?.countAttendees('breakfast') ?? 0,
-                  onStatusSelected: (status) {
-                    _markAttendance(systemId, 'breakfast', status);
-                  },
-                ),
-                const SizedBox(height: 16),
-
-                // Lunch
-                _MealCard(
-                  mealType: 'lunch',
-                  icon: Icons.wb_sunny,
-                  title: 'Lunch',
-                  currentStatus: attendance?.getUserStatus(userId, 'lunch'),
-                  attendeeCount: attendance?.countAttendees('lunch') ?? 0,
-                  onStatusSelected: (status) {
-                    _markAttendance(systemId, 'lunch', status);
-                  },
-                ),
-                const SizedBox(height: 16),
-
-                // Dinner
-                _MealCard(
-                  mealType: 'dinner',
-                  icon: Icons.nights_stay,
-                  title: 'Dinner',
-                  currentStatus: attendance?.getUserStatus(userId, 'dinner'),
-                  attendeeCount: attendance?.countAttendees('dinner') ?? 0,
-                  onStatusSelected: (status) {
-                    _markAttendance(systemId, 'dinner', status);
-                  },
-                ),
-                const SizedBox(height: 24),
-
-                // Info Card
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: Colors.blue.withOpacity(0.3),
-                    ),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(
-                        Icons.info_outline,
-                        color: Colors.blue[700],
-                        size: 20,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'Your attendance helps the cook prepare the right amount of food and is used for expense calculations.',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.blue[900],
-                            height: 1.4,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _QuickActionButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final Color color;
-  final VoidCallback onPressed;
-
-  const _QuickActionButton({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ElevatedButton(
-      onPressed: onPressed,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: color.withOpacity(0.1),
-        foregroundColor: color,
-        elevation: 0,
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: color.withOpacity(0.3)),
-        ),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+      body: Column(
         children: [
-          Icon(icon, size: 20),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: const TextStyle(fontWeight: FontWeight.bold),
+          // 1. DATE HEADER
+          _buildDateHeader(),
+
+          // 2. MAIN CONTENT (Wrapped in StreamBuilder for Real-Time Updates)
+          Expanded(
+            child: StreamBuilder<Map<String, String?>>(
+              // Listen to the specific document for this user/date
+              stream: attendanceService.streamUserAttendance(
+                systemId: systemId,
+                userId: userId,
+                date: _formattedDate,
+              ),
+              builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                        const SizedBox(height: 16),
+                        Text('Error loading data: ${snapshot.error}'),
+                        TextButton(
+                          onPressed: () => setState(() {}),
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+
+                // Current statuses from DB
+                final statuses = snapshot.data ?? 
+                    {'breakfast': null, 'lunch': null, 'dinner': null};
+
+                return ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    // 3. DAILY SUMMARY CARD
+                    _buildDailySummaryCard(statuses),
+                    const SizedBox(height: 24),
+
+                    // 4. MEAL CARDS
+                    _buildSectionTitle('Mark Your Meals'),
+                    const SizedBox(height: 12),
+                    
+                    _buildMealCard(
+                      systemId: systemId,
+                      title: 'Breakfast',
+                      timeRange: '07:00 AM - 10:00 AM',
+                      mealType: 'breakfast',
+                      currentStatus: statuses['breakfast'],
+                      icon: Icons.wb_twilight_rounded,
+                      color: Colors.orange,
+                    ),
+                    
+                    _buildMealCard(
+                      systemId: systemId,
+                      title: 'Lunch',
+                      timeRange: '12:30 PM - 03:00 PM',
+                      mealType: 'lunch',
+                      currentStatus: statuses['lunch'],
+                      icon: Icons.wb_sunny_rounded,
+                      color: Colors.amber[700]!,
+                    ),
+                    
+                    _buildMealCard(
+                      systemId: systemId,
+                      title: 'Dinner',
+                      timeRange: '08:00 PM - 10:30 PM',
+                      mealType: 'dinner',
+                      currentStatus: statuses['dinner'],
+                      icon: Icons.nights_stay_rounded,
+                      color: Colors.indigo,
+                    ),
+
+                    const SizedBox(height: 32),
+                    const Center(
+                      child: Text(
+                        'Marking correct attendance helps reduce food waste!',
+                        style: TextStyle(color: Colors.grey, fontSize: 12),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
+                );
+              },
+            ),
           ),
         ],
       ),
     );
   }
-}
 
-class _MealCard extends StatelessWidget {
-  final String mealType;
-  final IconData icon;
-  final String title;
-  final String? currentStatus;
-  final int attendeeCount;
-  final Function(String) onStatusSelected;
+  // ==================== WIDGET BUILDERS ====================
 
-  const _MealCard({
-    required this.mealType,
-    required this.icon,
-    required this.title,
-    required this.currentStatus,
-    required this.attendeeCount,
-    required this.onStatusSelected,
-  });
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildDateHeader() {
     return Container(
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+      decoration: BoxDecoration(
+        color: Theme.of(context).primaryColor,
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(24),
+          bottomRight: Radius.circular(24),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Theme.of(context).primaryColor.withOpacity(0.3),
+            blurRadius: 10,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.calendar_today, color: Colors.white, size: 20),
+          const SizedBox(width: 12),
+          Text(
+            DateFormat('EEEE, MMMM d, yyyy').format(_selectedDate),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDailySummaryCard(Map<String, String?> statuses) {
+    int eatingCount = 0;
+    statuses.forEach((key, value) {
+      if (value == AttendanceStatus.yes) eatingCount++;
+    });
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Colors.blue[700]!, Colors.blue[500]!],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.blue.withOpacity(0.3),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.2),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.restaurant_menu, color: Colors.white, size: 32),
+          ),
+          const SizedBox(width: 16),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Daily Overview',
+                style: TextStyle(color: Colors.white70, fontSize: 14),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'You are eating $eatingCount meal${eatingCount != 1 ? 's' : ''} today',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: Text(
+        title.toUpperCase(),
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+          color: Colors.grey[600],
+          letterSpacing: 1.2,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMealCard({
+    required String systemId,
+    required String title,
+    required String timeRange,
+    required String mealType,
+    required String? currentStatus,
+    required IconData icon,
+    required Color color,
+  }) {
+    final bool isAnswered = currentStatus != null;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withOpacity(0.04),
             blurRadius: 10,
+            offset: const Offset(0, 2),
           ),
         ],
+        border: isAnswered
+            ? Border.all(color: _getStatusColor(currentStatus!).withOpacity(0.3), width: 1.5)
+            : Border.all(color: Colors.transparent),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header
-            Row(
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+            child: Row(
               children: [
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Theme.of(context).primaryColor.withOpacity(0.1),
+                    color: color.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(
-                    icon,
-                    color: Theme.of(context).primaryColor,
-                    size: 24,
-                  ),
+                  child: Icon(icon, color: color, size: 24),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 16),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -352,35 +348,45 @@ class _MealCard extends StatelessWidget {
                         style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
+                          color: Colors.black87,
                         ),
                       ),
-                      Text(
-                        '$attendeeCount ${attendeeCount == 1 ? 'person' : 'people'} eating',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
-                        ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(Icons.access_time, size: 12, color: Colors.grey[500]),
+                          const SizedBox(width: 4),
+                          Text(
+                            timeRange,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey[500],
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ),
-                if (currentStatus != null)
+                if (isAnswered)
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
-                      color: _getStatusColor(currentStatus).withOpacity(0.1),
+                      color: _getStatusColor(currentStatus!).withOpacity(0.1),
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(AttendanceStatus.getEmoji(currentStatus!)),
+                        Icon(
+                          _getStatusIcon(currentStatus),
+                          size: 14,
+                          color: _getStatusColor(currentStatus),
+                        ),
                         const SizedBox(width: 4),
                         Text(
-                          AttendanceStatus.getDisplayName(currentStatus!),
+                          AttendanceStatus.getDisplayName(currentStatus),
                           style: TextStyle(
                             color: _getStatusColor(currentStatus),
                             fontWeight: FontWeight.bold,
@@ -392,114 +398,157 @@ class _MealCard extends StatelessWidget {
                   ),
               ],
             ),
-            const Divider(height: 24),
+          ),
+          
+          // Divider
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Divider(height: 1, color: Colors.grey[100]),
+          ),
 
-            // Status Buttons
-            const Text(
-              'Will you be eating?',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Colors.black87,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
+          // Action Buttons
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
               children: [
                 Expanded(
-                  child: _StatusButton(
-                    label: 'Yes',
+                  child: _StatusSelectionButton(
+                    label: 'Eating',
                     emoji: '✅',
-                    isSelected: currentStatus == AttendanceStatus.yes,
-                    color: Colors.green,
-                    onPressed: () => onStatusSelected(AttendanceStatus.yes),
+                    isActive: currentStatus == AttendanceStatus.yes,
+                    activeColor: Colors.green,
+                    onTap: () => _markAttendance(systemId, mealType, AttendanceStatus.yes),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: _StatusButton(
-                    label: 'No',
+                  child: _StatusSelectionButton(
+                    label: 'Skip',
                     emoji: '❌',
-                    isSelected: currentStatus == AttendanceStatus.no,
-                    color: Colors.red,
-                    onPressed: () => onStatusSelected(AttendanceStatus.no),
+                    isActive: currentStatus == AttendanceStatus.no,
+                    activeColor: Colors.red,
+                    onTap: () => _markAttendance(systemId, mealType, AttendanceStatus.no),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: _StatusButton(
+                  child: _StatusSelectionButton(
                     label: 'Maybe',
                     emoji: '❓',
-                    isSelected: currentStatus == AttendanceStatus.maybe,
-                    color: Colors.orange,
-                    onPressed: () => onStatusSelected(AttendanceStatus.maybe),
+                    isActive: currentStatus == AttendanceStatus.maybe,
+                    activeColor: Colors.orange,
+                    onTap: () => _markAttendance(systemId, mealType, AttendanceStatus.maybe),
                   ),
                 ),
               ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  Color _getStatusColor(String? status) {
+  Color _getStatusColor(String status) {
     switch (status) {
       case AttendanceStatus.yes:
-        return Colors.green;
+        return Colors.green[700]!;
       case AttendanceStatus.no:
-        return Colors.red;
+        return Colors.red[700]!;
       case AttendanceStatus.maybe:
-        return Colors.orange;
+        return Colors.orange[800]!;
       default:
         return Colors.grey;
     }
   }
+
+  IconData _getStatusIcon(String status) {
+    switch (status) {
+      case AttendanceStatus.yes:
+        return Icons.check_circle_outline;
+      case AttendanceStatus.no:
+        return Icons.cancel_outlined;
+      case AttendanceStatus.maybe:
+        return Icons.help_outline;
+      default:
+        return Icons.circle_outlined;
+    }
+  }
 }
 
-class _StatusButton extends StatelessWidget {
+// ==================== CUSTOM HELPER WIDGETS ====================
+
+class _StatusSelectionButton extends StatelessWidget {
   final String label;
   final String emoji;
-  final bool isSelected;
-  final Color color;
-  final VoidCallback onPressed;
+  final bool isActive;
+  final Color activeColor;
+  final VoidCallback onTap;
 
-  const _StatusButton({
+  const _StatusSelectionButton({
     required this.label,
     required this.emoji,
-    required this.isSelected,
-    required this.color,
-    required this.onPressed,
+    required this.isActive,
+    required this.activeColor,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return ElevatedButton(
-      onPressed: onPressed,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: isSelected ? color : Colors.grey[100],
-        foregroundColor: isSelected ? Colors.white : Colors.black87,
-        elevation: 0,
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-      ),
-      child: Column(
-        children: [
-          Text(
-            emoji,
-            style: const TextStyle(fontSize: 20),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              fontSize: 12,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+            color: isActive ? activeColor : Colors.grey[50],
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isActive ? activeColor : Colors.grey[200]!,
+              width: 1.5,
             ),
+            boxShadow: isActive
+                ? [
+                    BoxShadow(
+                      color: activeColor.withOpacity(0.3),
+                      blurRadius: 8,
+                      offset: const Offset(0, 3),
+                    )
+                  ]
+                : [],
           ),
-        ],
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                emoji,
+                style: TextStyle(
+                  fontSize: 20,
+                  shadows: isActive
+                      ? [
+                          const Shadow(
+                            color: Colors.black26,
+                            blurRadius: 4,
+                            offset: Offset(0, 2),
+                          )
+                        ]
+                      : null,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
+                  color: isActive ? Colors.white : Colors.grey[700],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

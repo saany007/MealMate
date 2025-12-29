@@ -13,94 +13,84 @@ class ShoppingTripService extends ChangeNotifier {
   bool _isLoading = false;
   String? _errorMessage;
 
-  // Getters
+  // Collection Reference Helper
+  CollectionReference _getTripsCollection(String systemId) {
+    return _firestore
+        .collection('shoppingTrips')
+        .doc(systemId)
+        .collection('trips');
+  }
+
+  // ==================== GETTERS ====================
+
   List<ShoppingTripModel> get trips => _trips;
   Map<String, ShoppingRotationTracker> get rotationTrackers => _rotationTrackers;
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
 
-  // Get pending trips
+  // Filtered Lists
   List<ShoppingTripModel> get pendingTrips =>
-      _trips.where((t) => t.isPending).toList();
+      _trips.where((t) => t.status == 'pending').toList();
 
-  // Get in-progress trips
   List<ShoppingTripModel> get inProgressTrips =>
-      _trips.where((t) => t.isInProgress).toList();
+      _trips.where((t) => t.status == 'in_progress').toList();
 
-  // Get completed trips
   List<ShoppingTripModel> get completedTrips =>
-      _trips.where((t) => t.isCompleted).toList();
+      _trips.where((t) => t.status == 'completed').toList();
 
-  // Get trips needing reimbursement
-  List<ShoppingTripModel> get tripsNeedingReimbursement =>
-      _trips.where((t) => t.needsReimbursement).toList();
+  List<ShoppingTripModel> get tripsNeedingReimbursement => _trips
+      .where((t) =>
+          t.status == 'completed' && t.reimbursementStatus == 'pending')
+      .toList();
 
-  // ==================== LOAD SHOPPING TRIPS ====================
+  // ==================== STATE HELPERS ====================
+
+  void _setLoading(bool value) {
+    _isLoading = value;
+    notifyListeners();
+  }
+
+  void _setError(String? message) {
+    _errorMessage = message;
+    notifyListeners();
+    if (message != null) {
+      debugPrint("ShoppingTripService Error: $message");
+    }
+  }
+
+  // ==================== CORE METHODS ====================
 
   Future<void> loadShoppingTrips(String systemId) async {
     try {
-      _isLoading = true;
-      _errorMessage = null;
-      notifyListeners();
+      _setLoading(true);
+      _setError(null);
 
-      final QuerySnapshot snapshot = await _firestore
-          .collection('shoppingTrips')
-          .doc(systemId)
-          .collection('trips')
+      final snapshot = await _getTripsCollection(systemId)
           .orderBy('assignedDate', descending: true)
-          .limit(50)
           .get();
 
       _trips = snapshot.docs
           .map((doc) => ShoppingTripModel.fromDocument(doc))
           .toList();
 
-      _isLoading = false;
+      _calculateRotationStats();
       notifyListeners();
     } catch (e) {
-      _isLoading = false;
-      _errorMessage = 'Failed to load shopping trips: ${e.toString()}';
-      notifyListeners();
+      _setError('Failed to load trips: $e');
+    } finally {
+      _setLoading(false);
     }
   }
 
-  // ==================== LOAD ROTATION TRACKERS ====================
-
-  Future<void> loadRotationTrackers(String systemId) async {
-    try {
-      final DocumentSnapshot doc = await _firestore
-          .collection('shoppingRotation')
-          .doc(systemId)
-          .get();
-
-      if (doc.exists && doc.data() != null) {
-        final data = doc.data() as Map<String, dynamic>;
-        _rotationTrackers = data.map(
-          (key, value) => MapEntry(
-            key,
-            ShoppingRotationTracker.fromMap(value as Map<String, dynamic>),
-          ),
-        );
-      } else {
-        _rotationTrackers = {};
-      }
-      notifyListeners();
-    } catch (e) {
-      _errorMessage = 'Failed to load rotation trackers: ${e.toString()}';
-      notifyListeners();
-    }
-  }
-
-  // ==================== CREATE SHOPPING TRIP ====================
-
-  Future<ShoppingTripModel?> createShoppingTrip({
+  Future<bool> createShoppingTrip({
     required String systemId,
     required String assignedTo,
     required String assignedToName,
-    String? groceryListId,
     String? notes,
+    String? groceryListId,
   }) async {
     try {
+      _setLoading(true);
       final tripId = _uuid.v4();
       final now = DateTime.now();
 
@@ -110,295 +100,133 @@ class ShoppingTripService extends ChangeNotifier {
         assignedTo: assignedTo,
         assignedToName: assignedToName,
         assignedDate: now,
-        status: ShoppingTripStatus.pending,
-        groceryListId: groceryListId,
-        notes: notes,
+        status: 'pending',
         createdAt: now,
+        notes: notes,
+        groceryListId: groceryListId,
+        totalSpent: 0.0,
+        reimbursementStatus: 'not_applicable',
       );
 
-      await _firestore
-          .collection('shoppingTrips')
-          .doc(systemId)
-          .collection('trips')
-          .doc(tripId)
-          .set(trip.toMap());
+      await _getTripsCollection(systemId).doc(tripId).set(trip.toMap());
 
       _trips.insert(0, trip);
       notifyListeners();
-
-      return trip;
+      return true;
     } catch (e) {
-      _errorMessage = 'Failed to create shopping trip: ${e.toString()}';
-      notifyListeners();
-      return null;
+      _setError('Failed to create trip: $e');
+      return false;
+    } finally {
+      _setLoading(false);
     }
   }
 
-  // ==================== UPDATE SHOPPING TRIP ====================
-
-  Future<bool> updateShoppingTrip({
+  // --- UPDATE TRIP ---
+  Future<bool> updateTrip({
     required String systemId,
     required String tripId,
-    String? status,
-    double? totalSpent,
-    String? receiptURL,
-    List<String>? itemsPurchased,
-    String? reimbursementStatus,
-    String? notes,
+    required Map<String, dynamic> updates,
   }) async {
     try {
-      Map<String, dynamic> updates = {};
+      _setLoading(true);
 
-      if (status != null) {
-        updates['status'] = status;
-        if (status == ShoppingTripStatus.completed) {
-          updates['completedDate'] = Timestamp.now();
-        }
-      }
-      if (totalSpent != null) updates['totalSpent'] = totalSpent;
-      if (receiptURL != null) updates['receiptURL'] = receiptURL;
-      if (itemsPurchased != null) updates['itemsPurchased'] = itemsPurchased;
-      if (reimbursementStatus != null) {
-        updates['reimbursementStatus'] = reimbursementStatus;
-      }
-      if (notes != null) updates['notes'] = notes;
+      // 1. Update Firestore
+      await _getTripsCollection(systemId).doc(tripId).update(updates);
 
-      await _firestore
-          .collection('shoppingTrips')
-          .doc(systemId)
-          .collection('trips')
-          .doc(tripId)
-          .update(updates);
-
-      // Update local list
+      // 2. Update Local State Manually
       final index = _trips.indexWhere((t) => t.tripId == tripId);
       if (index != -1) {
         final oldTrip = _trips[index];
-        _trips[index] = oldTrip.copyWith(
-          status: status,
-          totalSpent: totalSpent,
-          receiptURL: receiptURL,
-          itemsPurchased: itemsPurchased,
-          reimbursementStatus: reimbursementStatus,
-          notes: notes,
-          completedDate: status == ShoppingTripStatus.completed 
-              ? DateTime.now() 
-              : oldTrip.completedDate,
-        );
-
-        // If trip is completed, update rotation tracker
-        if (status == ShoppingTripStatus.completed) {
-          await _updateRotationTracker(
-            systemId: systemId,
-            userId: oldTrip.assignedTo,
-            userName: oldTrip.assignedToName,
-            spent: totalSpent ?? oldTrip.totalSpent,
-          );
-        }
-      }
-
-      notifyListeners();
-      return true;
-    } catch (e) {
-      _errorMessage = 'Failed to update shopping trip: ${e.toString()}';
-      notifyListeners();
-      return false;
-    }
-  }
-
-  // ==================== DELETE SHOPPING TRIP ====================
-
-  Future<bool> deleteShoppingTrip(String systemId, String tripId) async {
-    try {
-      await _firestore
-          .collection('shoppingTrips')
-          .doc(systemId)
-          .collection('trips')
-          .doc(tripId)
-          .delete();
-
-      _trips.removeWhere((t) => t.tripId == tripId);
-      notifyListeners();
-      return true;
-    } catch (e) {
-      _errorMessage = 'Failed to delete shopping trip: ${e.toString()}';
-      notifyListeners();
-      return false;
-    }
-  }
-
-  // ==================== AUTO-ASSIGN NEXT SHOPPER ====================
-
-  Future<String?> autoAssignNextShopper({
-    required String systemId,
-    required MealSystemModel mealSystem,
-  }) async {
-    try {
-      // Load rotation trackers if not loaded
-      if (_rotationTrackers.isEmpty) {
-        await loadRotationTrackers(systemId);
-      }
-
-      // Initialize trackers for members who don't have one
-      for (var entry in mealSystem.members.entries) {
-        if (!_rotationTrackers.containsKey(entry.key)) {
-          _rotationTrackers[entry.key] = ShoppingRotationTracker(
-            userId: entry.key,
-            userName: entry.value.name,
-          );
-        }
-      }
-
-      // Find member with lowest trip count (fairness algorithm)
-      String? nextShopperId;
-      int minTrips = 999999;
-
-      for (var entry in _rotationTrackers.entries) {
-        // Check if user is still a member
-        if (mealSystem.members.containsKey(entry.key)) {
-          if (entry.value.totalTripsCompleted < minTrips) {
-            minTrips = entry.value.totalTripsCompleted;
-            nextShopperId = entry.key;
+        Map<String, dynamic> mergedData = oldTrip.toMap();
+        
+        updates.forEach((key, value) {
+          if (value is DateTime) {
+            mergedData[key] = Timestamp.fromDate(value);
+          } else {
+            mergedData[key] = value;
           }
-        }
+        });
+
+        _trips[index] = ShoppingTripModel.fromMap(mergedData);
+        _calculateRotationStats();
+        notifyListeners(); 
+      } else {
+        await loadShoppingTrips(systemId);
       }
 
-      return nextShopperId;
+      return true;
     } catch (e) {
-      _errorMessage = 'Failed to assign next shopper: ${e.toString()}';
-      notifyListeners();
-      return null;
+      _setError('Failed to update trip: $e');
+      return false;
+    } finally {
+      _setLoading(false);
     }
   }
 
-  // ==================== UPDATE ROTATION TRACKER ====================
-
-  Future<void> _updateRotationTracker({
+  // --- COMPLETE TRIP ---
+  Future<bool> completeTrip({
     required String systemId,
-    required String userId,
-    required String userName,
-    required double spent,
+    required String tripId,
+    required double totalSpent,
+    List<String>? itemsPurchased, 
   }) async {
-    try {
-      final tracker = _rotationTrackers[userId] ?? ShoppingRotationTracker(
-        userId: userId,
-        userName: userName,
-      );
+    final updates = {
+      'status': 'completed',
+      'completedDate': DateTime.now(),
+      'totalSpent': totalSpent,
+      'reimbursementStatus': totalSpent > 0 ? 'pending' : 'not_applicable',
+    };
 
-      final updatedTracker = ShoppingRotationTracker(
-        userId: userId,
-        userName: userName,
-        totalTripsCompleted: tracker.totalTripsCompleted + 1,
-        lastShoppingDate: DateTime.now(),
-        totalSpent: tracker.totalSpent + spent,
-        preferredDays: tracker.preferredDays,
-      );
-
-      await _firestore
-          .collection('shoppingRotation')
-          .doc(systemId)
-          .set({
-        userId: updatedTracker.toMap(),
-      }, SetOptions(merge: true));
-
-      _rotationTrackers[userId] = updatedTracker;
-      notifyListeners();
-    } catch (e) {
-      _errorMessage = 'Failed to update rotation tracker: ${e.toString()}';
+    if (itemsPurchased != null) {
+      updates['itemsPurchased'] = itemsPurchased;
     }
+
+    return await updateTrip(
+      systemId: systemId,
+      tripId: tripId,
+      updates: updates,
+    );
   }
 
-  // ==================== UPDATE PREFERRED DAYS ====================
-
-  Future<bool> updatePreferredDays({
-    required String systemId,
-    required String userId,
-    required String userName,
-    required List<String> preferredDays,
-  }) async {
+  Future<bool> deleteTrip(String systemId, String tripId) async {
     try {
-      final tracker = _rotationTrackers[userId] ?? ShoppingRotationTracker(
-        userId: userId,
-        userName: userName,
-      );
-
-      final updatedTracker = ShoppingRotationTracker(
-        userId: userId,
-        userName: userName,
-        totalTripsCompleted: tracker.totalTripsCompleted,
-        lastShoppingDate: tracker.lastShoppingDate,
-        totalSpent: tracker.totalSpent,
-        preferredDays: preferredDays,
-      );
-
-      await _firestore
-          .collection('shoppingRotation')
-          .doc(systemId)
-          .set({
-        userId: updatedTracker.toMap(),
-      }, SetOptions(merge: true));
-
-      _rotationTrackers[userId] = updatedTracker;
+      _setLoading(true);
+      await _getTripsCollection(systemId).doc(tripId).delete();
+      _trips.removeWhere((t) => t.tripId == tripId);
+      _calculateRotationStats();
       notifyListeners();
       return true;
     } catch (e) {
-      _errorMessage = 'Failed to update preferred days: ${e.toString()}';
-      notifyListeners();
+      _setError('Failed to delete: $e');
       return false;
+    } finally {
+      _setLoading(false);
     }
   }
 
-  // ==================== STREAM SHOPPING TRIPS ====================
+  // --- STATS ---
+  void _calculateRotationStats() {
+    _rotationTrackers.clear();
+    if (_trips.isEmpty) return;
 
-  Stream<List<ShoppingTripModel>> streamShoppingTrips(String systemId) {
-    return _firestore
-        .collection('shoppingTrips')
-        .doc(systemId)
-        .collection('trips')
-        .orderBy('assignedDate', descending: true)
-        .snapshots()
-        .map((snapshot) {
-      return snapshot.docs
-          .map((doc) => ShoppingTripModel.fromDocument(doc))
-          .toList();
-    });
-  }
-
-  // ==================== GET SHOPPING SUMMARY ====================
-
-  ShoppingTripSummary getShoppingTripSummary() {
-    final totalTrips = _trips.length;
-    final completedTrips = _trips.where((t) => t.isCompleted).length;
-    final pendingTrips = _trips.where((t) => t.isPending).length;
-    final totalSpent = _trips.fold<double>(
-      0.0,
-      (sum, trip) => sum + trip.totalSpent,
-    );
-    final averageSpent = completedTrips > 0 ? totalSpent / completedTrips : 0.0;
-
-    final Map<String, int> tripsByMember = {};
     for (var trip in _trips) {
-      tripsByMember[trip.assignedToName] = 
-          (tripsByMember[trip.assignedToName] ?? 0) + 1;
+      if (trip.status != 'completed') continue;
+
+      final userId = trip.assignedTo;
+      if (!_rotationTrackers.containsKey(userId)) {
+        _rotationTrackers[userId] = ShoppingRotationTracker(
+          userId: userId,
+          userName: trip.assignedToName,
+        );
+      }
+
+      final current = _rotationTrackers[userId]!;
+      _rotationTrackers[userId] = ShoppingRotationTracker(
+        userId: userId,
+        userName: current.userName,
+        totalTripsCompleted: current.totalTripsCompleted + 1,
+        totalSpent: current.totalSpent + trip.totalSpent,
+      );
     }
-
-    return ShoppingTripSummary(
-      totalTrips: totalTrips,
-      completedTrips: completedTrips,
-      pendingTrips: pendingTrips,
-      totalSpent: totalSpent,
-      averageSpentPerTrip: averageSpent,
-      tripsByMember: tripsByMember,
-    );
-  }
-
-  // ==================== CLEAR DATA ====================
-
-  void clearData() {
-    _trips = [];
-    _rotationTrackers = {};
-    _isLoading = false;
-    _errorMessage = null;
-    notifyListeners();
   }
 }

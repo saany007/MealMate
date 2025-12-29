@@ -194,19 +194,33 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen>
             expandedHeight: 250,
             pinned: true,
             flexibleSpace: FlexibleSpaceBar(
+              // FIX: Ensure title is readable with a background overlay
+              titlePadding: EdgeInsets.zero,
               title: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.6),
-                  borderRadius: BorderRadius.circular(8),
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      Colors.black.withOpacity(0.8),
+                      Colors.transparent,
+                    ],
+                  ),
                 ),
                 child: Text(
                   _recipe!.title,
-                  style: const TextStyle(fontSize: 14),
+                  style: const TextStyle(
+                    fontSize: 16, 
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
+              centerTitle: false,
               background: _recipe!.image.isNotEmpty
                   ? Image.network(
                       _recipe!.image,

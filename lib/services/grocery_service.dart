@@ -52,7 +52,7 @@ class GroceryService extends ChangeNotifier {
       final newList = GroceryListModel(
         listId: listId,
         systemId: systemId,
-        status: GroceryListStatus.active,
+        status: GroceryListStatus.active, // FIX: Removed .name
         createdBy: createdBy,
         createdDate: DateTime.now(),
         items: {},
@@ -84,7 +84,7 @@ class GroceryService extends ChangeNotifier {
           .collection('groceryLists')
           .doc(systemId)
           .collection('lists')
-          .where('status', isEqualTo: GroceryListStatus.active)
+          .where('status', isEqualTo: GroceryListStatus.active) // FIX: Removed .name
           .limit(1)
           .get();
 
@@ -109,7 +109,7 @@ class GroceryService extends ChangeNotifier {
         .collection('groceryLists')
         .doc(systemId)
         .collection('lists')
-        .where('status', isEqualTo: GroceryListStatus.active)
+        .where('status', isEqualTo: GroceryListStatus.active) // FIX: Removed .name
         .limit(1)
         .snapshots()
         .map((snapshot) {
@@ -149,18 +149,25 @@ class GroceryService extends ChangeNotifier {
         addedDate: DateTime.now(),
       );
 
+      // FIX: Use set with merge and REMOVE .name from status
       await _firestore
           .collection('groceryLists')
           .doc(systemId)
           .collection('lists')
           .doc(listId)
-          .update({
-        'items.$itemId': newItem.toMap(),
-      });
+          .set({
+        'items': {
+          itemId: newItem.toMap()
+        },
+        'systemId': systemId, 
+        'status': GroceryListStatus.active, // FIX: Removed .name
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
       return true;
     } catch (e) {
       _setError('Failed to add item: $e');
+      print("Add Item Error: $e"); 
       return false;
     }
   }
@@ -279,7 +286,7 @@ class GroceryService extends ChangeNotifier {
   }) async {
     try {
       final updates = {
-        'status': GroceryListStatus.completed,
+        'status': GroceryListStatus.completed, // FIX: Removed .name
         'completedDate': Timestamp.fromDate(DateTime.now()),
       };
 
@@ -310,7 +317,7 @@ class GroceryService extends ChangeNotifier {
           .collection('groceryLists')
           .doc(systemId)
           .collection('lists')
-          .where('status', isEqualTo: GroceryListStatus.completed)
+          .where('status', isEqualTo: GroceryListStatus.completed) // FIX: Removed .name
           .orderBy('completedDate', descending: true)
           .limit(limit)
           .get();
@@ -396,10 +403,8 @@ class GroceryService extends ChangeNotifier {
 
   // ==================== AUTO-GENERATE GROCERY LIST ====================
 
-  /// Automatically generates grocery items based on the Meal Calendar for the next [days] days.
-  /// It connects [DatabaseService] (to get meals), [RecipeService] (to get ingredients),
-  /// and [InventoryService] (to check stock).
-  Future<void> autoGenerateGroceryList({
+  // FIX: Changed return type to Future<int>
+  Future<int> autoGenerateGroceryList({
     required String systemId,
     required String userId,
     required DatabaseService databaseService,
@@ -407,45 +412,46 @@ class GroceryService extends ChangeNotifier {
     required InventoryService inventoryService,
     int days = 7,
   }) async {
+    int itemsAddedCount = 0; // Initialize counter
     try {
       _setLoading(true);
+      print("--- STARTING AUTO-GENERATE ---");
       
       // 1. Fetch meals for the next X days
       final startDate = DateTime.now();
       final endDate = startDate.add(Duration(days: days));
       
       final meals = await databaseService.getDailyMealsForRange(systemId, startDate, endDate);
+      print("Found ${meals.length} days with meals.");
       
       if (meals.isEmpty) {
         _setLoading(false);
-        return;
+        return 0;
       }
 
-      // 2. Extract unique menu strings from all meal slots
+      // 2. Extract unique menu strings
       final Set<String> menus = {};
       for (var day in meals) {
         if (day.breakfast.menu != null && day.breakfast.menu!.isNotEmpty) menus.add(day.breakfast.menu!);
         if (day.lunch.menu != null && day.lunch.menu!.isNotEmpty) menus.add(day.lunch.menu!);
         if (day.dinner.menu != null && day.dinner.menu!.isNotEmpty) menus.add(day.dinner.menu!);
       }
+      print("Unique menus found: $menus");
       
       // 3. Collect required ingredients
-      // Map: Ingredient Name -> Needed Quantity (simplified assumption: base quantity = 1 unit per recipe)
       final Map<String, double> neededIngredients = {};
-      // Map: Ingredient Name -> Unit
       final Map<String, String> ingredientUnits = {};
-      // Map: Ingredient Name -> Aisle/Category
       final Map<String, String> ingredientCategories = {};
 
       for (var menu in menus) {
         if (menu.toLowerCase() == 'tbd') continue;
 
-        // Use RecipeService to guess ingredients for this menu string
+        // Try to find ingredients
         final ingredients = await recipeService.getIngredientsForMenu(menu);
+        print("Menu '$menu' has ${ingredients.length} ingredients.");
         
         for (var ing in ingredients) {
           final name = ing.name.toLowerCase();
-          // Accumulate quantity (defaulting to the recipe's measure)
           neededIngredients[name] = (neededIngredients[name] ?? 0) + ing.amount;
           ingredientUnits[name] = ing.unit;
           ingredientCategories[name] = ing.aisle ?? 'Other';
@@ -453,34 +459,49 @@ class GroceryService extends ChangeNotifier {
       }
 
       // 4. Fetch current inventory to compare
-      // We assume InventoryService has loaded items, or we force a reload
       await inventoryService.getItems(systemId); 
       final inventoryItems = inventoryService.items;
+      print("Inventory has ${inventoryItems.length} items to check against.");
 
       // 5. Subtract inventory from needed
       for (var invItem in inventoryItems) {
         final name = invItem.name.toLowerCase();
-        // Check if we need this item
-        // Note: This is a simple string match. Advanced logic would need fuzzy matching/synonyms.
         if (neededIngredients.containsKey(name)) {
           final needed = neededIngredients[name]!;
-          // Simple subtraction (ignoring complex unit conversion for this academic prototype)
-          // We assume units match roughly or user can adjust.
           final remaining = needed - invItem.quantity;
           
           if (remaining <= 0) {
-             neededIngredients.remove(name); // We have enough
+             neededIngredients.remove(name);
           } else {
-             neededIngredients[name] = remaining; // We need this much more
+             neededIngredients[name] = remaining;
           }
         }
       }
 
+      print("Final items needed to buy: ${neededIngredients.length}");
+
       // 6. Add remaining needed items to Grocery List
       if (neededIngredients.isNotEmpty) {
-        // Ensure list exists
-        if (_currentList == null) {
-          await createGroceryList(systemId: systemId, createdBy: userId);
+        
+        // Find existing list first
+        String targetListId;
+        
+        final existingQuery = await _firestore
+            .collection('groceryLists')
+            .doc(systemId)
+            .collection('lists')
+            .where('status', isEqualTo: GroceryListStatus.active) // FIX: Removed .name
+            .limit(1)
+            .get();
+
+        if (existingQuery.docs.isNotEmpty) {
+          targetListId = existingQuery.docs.first.id;
+          print("Found existing list ID: $targetListId");
+        } else {
+          print("No existing list found, creating new one...");
+          final newList = await createGroceryList(systemId: systemId, createdBy: userId);
+          if (newList == null) throw Exception("Could not create list");
+          targetListId = newList.listId;
         }
         
         // Batch add items
@@ -490,35 +511,37 @@ class GroceryService extends ChangeNotifier {
           final unit = ingredientUnits[name] ?? 'unit';
           final categoryRaw = ingredientCategories[name] ?? 'Other';
           
-          // Map Spoonacular aisle to our GroceryCategory enum manually or use generic
           String category = GroceryCategory.other;
           if (categoryRaw.contains('Produce')) category = GroceryCategory.vegetables;
           else if (categoryRaw.contains('Meat')) category = GroceryCategory.meat;
           else if (categoryRaw.contains('Milk') || categoryRaw.contains('Cheese')) category = GroceryCategory.dairy;
           else if (categoryRaw.contains('Spices')) category = GroceryCategory.spices;
-          // ... add more mappings as needed
 
-          // Add to list (Capitalize first letter of name)
           final displayName = name[0].toUpperCase() + name.substring(1);
           
           await addItem(
             systemId: systemId,
-            listId: _currentList!.listId,
+            listId: targetListId, 
             name: displayName,
-            quantity: double.parse(qty.toStringAsFixed(1)), // Round to 1 decimal
+            quantity: double.parse(qty.toStringAsFixed(1)),
             unit: unit,
-            estimatedCost: 0, // Unknown cost at this stage
+            estimatedCost: 0,
             category: category,
             addedBy: userId,
-            isOptional: false, // Auto-generated are usually needed
+            isOptional: false,
           );
+          itemsAddedCount++;
         }
       }
 
     } catch (e) {
+      print("AUTO-GEN ERROR: $e");
       _setError('Failed to auto-generate list: $e');
     } finally {
       _setLoading(false);
     }
+    
+    // FIX: Ensure the int is returned
+    return itemsAddedCount;
   }
 }

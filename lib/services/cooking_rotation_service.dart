@@ -123,11 +123,60 @@ class CookingRotationService extends ChangeNotifier {
     });
   }
 
+  // Sync members from Meal System to Rotation
+  Future<void> syncSystemMembers({
+    required String systemId,
+    required MealSystemModel mealSystem,
+  }) async {
+    try {
+      final rotation = await getRotation(systemId);
+      if (rotation == null) return;
+
+      bool needsUpdate = false;
+      final Map<String, MemberRotationInfo> updatedMembers = Map.from(rotation.members);
+
+      // Check for missing members and add them
+      mealSystem.members.forEach((userId, memberData) {
+        if (!updatedMembers.containsKey(userId)) {
+          updatedMembers[userId] = MemberRotationInfo(
+            userId: userId,
+            userName: memberData.name,
+            totalCooksCompleted: 0,
+            totalCooksAssigned: 0,
+          );
+          needsUpdate = true;
+        }
+      });
+
+      if (needsUpdate) {
+        await _firestore.collection('cookingRotation').doc(systemId).update({
+          'members': updatedMembers.map((k, v) => MapEntry(k, v.toMap())),
+          'lastUpdated': Timestamp.fromDate(DateTime.now()),
+        });
+        _currentRotation = rotation.copyWith(members: updatedMembers);
+        notifyListeners();
+      }
+    } catch (e) {
+      print("Error syncing members: $e");
+    }
+  }
+
   // Generate schedule for upcoming days
   Future<bool> generateSchedule(String systemId, {int daysAhead = 7}) async {
     try {
       final rotation = await getRotation(systemId);
       if (rotation == null) return false;
+
+      // === CRITICAL FIX START: HARD RESET ASSIGNED COUNTS ===
+      // Since we are generating a brand new schedule that REPLACES the old one,
+      // we must reset everyone's "Assigned" count to match their "Completed" count first.
+      // This wipes out any "ghost" assignments from previous runs and fixes the "220" bug.
+      rotation.members.forEach((key, member) {
+        rotation.members[key] = member.copyWith(
+          totalCooksAssigned: member.totalCooksCompleted
+        );
+      });
+      // === CRITICAL FIX END ===
 
       final schedule = <ScheduledCook>[];
       final startDate = DateTime.now();
@@ -156,7 +205,6 @@ class CookingRotationService extends ChangeNotifier {
 
         bool shouldSchedule = false;
 
-        // Determine if we should schedule cooking for this day
         switch (rotation.settings.frequency) {
           case RotationFrequency.daily:
             shouldSchedule = true;
@@ -173,7 +221,6 @@ class CookingRotationService extends ChangeNotifier {
 
         // Assign cooks for each meal type in settings
         for (var mealType in rotation.settings.mealsToRotate) {
-          // Find next available member
           String? assignedUserId;
           String? assignedUserName;
 
@@ -212,7 +259,7 @@ class CookingRotationService extends ChangeNotifier {
 
           schedule.add(scheduledCook);
 
-          // Update member's assigned count
+          // Update member's assigned count (Increment from the reset baseline)
           final memberInfo = rotation.members[assignedUserId]!;
           rotation.members[assignedUserId] = memberInfo.copyWith(
             totalCooksAssigned: memberInfo.totalCooksAssigned + 1,
@@ -269,14 +316,21 @@ class CookingRotationService extends ChangeNotifier {
       List<ScheduledCook> updatedSchedule = List.from(rotation.upcomingSchedule);
 
       if (existingIndex != -1) {
-        // Replace existing assignment
+        // If replacing, decrement the OLD user's assigned count
+        final oldUserId = rotation.upcomingSchedule[existingIndex].assignedTo;
+        final oldMember = rotation.members[oldUserId];
+        if (oldMember != null && oldMember.totalCooksAssigned > 0) {
+            rotation.members[oldUserId] = oldMember.copyWith(
+                totalCooksAssigned: oldMember.totalCooksAssigned - 1
+            );
+        }
         updatedSchedule[existingIndex] = scheduledCook;
       } else {
         // Add new assignment
         updatedSchedule.add(scheduledCook);
       }
 
-      // Update member's assigned count
+      // Increment NEW user's assigned count
       final memberInfo = rotation.members[assignedTo];
       if (memberInfo != null) {
         rotation.members[assignedTo] = memberInfo.copyWith(
@@ -368,10 +422,16 @@ class CookingRotationService extends ChangeNotifier {
       final rotation = await getRotation(systemId);
       if (rotation == null) return false;
 
-      final memberInfo = rotation.members[userId];
+      MemberRotationInfo? memberInfo = rotation.members[userId];
+      
+      // If member doesn't exist in rotation map (e.g. joined late), create them
       if (memberInfo == null) {
-        _setError('Member not found');
-        return false;
+        memberInfo = MemberRotationInfo(
+          userId: userId,
+          userName: 'Member', // Placeholder
+          totalCooksCompleted: 0,
+          totalCooksAssigned: 0,
+        );
       }
 
       final updatedMember = memberInfo.copyWith(
@@ -453,6 +513,15 @@ class CookingRotationService extends ChangeNotifier {
       final rotation = await getRotation(systemId);
       if (rotation == null) return false;
 
+      // Decrement count before removing
+      final cookToRemove = rotation.upcomingSchedule.firstWhere((s) => s.scheduleId == scheduleId, orElse: () => rotation.upcomingSchedule.first);
+      final member = rotation.members[cookToRemove.assignedTo];
+      if (member != null && member.totalCooksAssigned > 0) {
+        rotation.members[cookToRemove.assignedTo] = member.copyWith(
+          totalCooksAssigned: member.totalCooksAssigned - 1
+        );
+      }
+
       final updatedSchedule = rotation.upcomingSchedule
           .where((s) => s.scheduleId != scheduleId)
           .toList();
@@ -462,6 +531,7 @@ class CookingRotationService extends ChangeNotifier {
           .doc(systemId)
           .update({
         'upcomingSchedule': updatedSchedule.map((s) => s.toMap()).toList(),
+        'members': rotation.members.map((k, v) => MapEntry(k, v.toMap())),
         'lastUpdated': Timestamp.fromDate(DateTime.now()),
       });
 
@@ -538,6 +608,8 @@ class CookingRotationService extends ChangeNotifier {
     if (_currentRotation == null) return false;
 
     // Check if we have enough days scheduled
+    if (_currentRotation!.upcomingSchedule.isEmpty) return true;
+    
     final lastScheduledDate = _currentRotation!.upcomingSchedule
         .map((s) => DateTime.parse(s.date))
         .reduce((a, b) => a.isAfter(b) ? a : b);

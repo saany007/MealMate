@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/auth_service.dart';
-import '../services/database_service.dart';
-import '../models/daily_meal_model.dart';
-import '../widgets/custom_button.dart';
+import '../services/database_service.dart'; // Kept for other reads if needed
+import '../models/attendance_model.dart'; 
 
 class MealCalendarScreen extends StatefulWidget {
   const MealCalendarScreen({super.key});
@@ -14,13 +14,12 @@ class MealCalendarScreen extends StatefulWidget {
 }
 
 class _MealCalendarScreenState extends State<MealCalendarScreen> {
-  final DatabaseService _db = DatabaseService();
   DateTime _selectedDate = DateTime.now();
-  
-  // Get next 7 days
-  List<DateTime> get _weekDays {
+
+  // Generate next 14 days for the horizontal scroller
+  List<DateTime> get _calendarDays {
     final now = DateTime.now();
-    return List.generate(7, (index) => now.add(Duration(days: index)));
+    return List.generate(14, (index) => now.add(Duration(days: index)));
   }
 
   @override
@@ -28,45 +27,172 @@ class _MealCalendarScreenState extends State<MealCalendarScreen> {
     final authService = Provider.of<AuthService>(context);
     final systemId = authService.userModel?.currentMealSystemId;
 
-    if (systemId == null) return const Scaffold(body: Center(child: Text("No System Found")));
+    if (systemId == null) {
+      return const Scaffold(body: Center(child: Text("No System Found")));
+    }
 
-    // Prepare date keys for DB
-    List<String> dateKeys = _weekDays.map((d) => DateFormat('yyyy-MM-dd').format(d)).toList();
+    final selectedDateStr = DateFormat('yyyy-MM-dd').format(_selectedDate);
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
-      appBar: AppBar(title: const Text('Meal Calendar')),
+      appBar: AppBar(
+        title: const Text('Meal Calendar'),
+        elevation: 0,
+      ),
       body: Column(
         children: [
-          // 1. Horizontal Date Selector
-          Container(
-            height: 100,
-            color: Colors.white,
+          // 1. Modern Date Selector
+          _buildDateSelector(),
+
+          // 2. Real-time Meal Content
+          Expanded(
+            child: StreamBuilder<DocumentSnapshot>(
+              // STREAM 1: Read Meal Details (Cook, Menu) from mealCalendar
+              stream: FirebaseFirestore.instance
+                  .collection('mealCalendar')
+                  .doc(systemId)
+                  .collection('days')
+                  .doc(selectedDateStr)
+                  .snapshots(),
+              builder: (context, mealSnapshot) {
+                
+                return StreamBuilder<DocumentSnapshot>(
+                  // STREAM 2: Read Attendance (Who is eating) directly to calculate count
+                  stream: FirebaseFirestore.instance
+                      .collection('attendance')
+                      .doc(systemId)
+                      .collection('days')
+                      .doc(selectedDateStr)
+                      .snapshots(),
+                  builder: (context, attendanceSnapshot) {
+                    if (mealSnapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    // Parse Meal Data (Cooks & Menus)
+                    final mealData = mealSnapshot.data?.data() as Map<String, dynamic>? ?? {};
+                    
+                    // Parse Attendance Data (To count attendees)
+                    final attendanceData = attendanceSnapshot.data?.data() as Map<String, dynamic>? ?? {};
+
+                    return ListView(
+                      padding: const EdgeInsets.all(16),
+                      children: [
+                        _buildMealCard(
+                          context,
+                          'Breakfast',
+                          'breakfast',
+                          mealData['breakfast'],
+                          attendanceData['breakfast'],
+                          Icons.wb_twilight_rounded,
+                          Colors.orange,
+                          systemId,
+                        ),
+                        _buildMealCard(
+                          context,
+                          'Lunch',
+                          'lunch',
+                          mealData['lunch'],
+                          attendanceData['lunch'],
+                          Icons.wb_sunny_rounded,
+                          Colors.amber[700]!,
+                          systemId,
+                        ),
+                        _buildMealCard(
+                          context,
+                          'Dinner',
+                          'dinner',
+                          mealData['dinner'],
+                          attendanceData['dinner'],
+                          Icons.nights_stay_rounded,
+                          Colors.indigo,
+                          systemId,
+                        ),
+                        const SizedBox(height: 20),
+                      ],
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ==================== WIDGET BUILDERS ====================
+
+  Widget _buildDateSelector() {
+    return Container(
+      height: 110,
+      decoration: BoxDecoration(
+        color: Theme.of(context).primaryColor,
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(24),
+          bottomRight: Radius.circular(24),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Theme.of(context).primaryColor.withOpacity(0.3),
+            blurRadius: 10,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 20, top: 10, bottom: 5),
+            child: Text(
+              DateFormat('MMMM yyyy').format(_selectedDate),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          Expanded(
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
-              itemCount: _weekDays.length,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              itemCount: _calendarDays.length,
               itemBuilder: (context, index) {
-                final date = _weekDays[index];
+                final date = _calendarDays[index];
                 final isSelected = DateUtils.isSameDay(date, _selectedDate);
-                
+                final isToday = DateUtils.isSameDay(date, DateTime.now());
+
                 return GestureDetector(
                   onTap: () => setState(() => _selectedDate = date),
                   child: Container(
-                    width: 70,
-                    margin: const EdgeInsets.all(8),
+                    width: 60,
+                    margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                     decoration: BoxDecoration(
-                      color: isSelected ? Theme.of(context).primaryColor : Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: isSelected ? Colors.transparent : Colors.grey[300]!),
-                      boxShadow: isSelected ? [BoxShadow(color: Colors.green.withOpacity(0.3), blurRadius: 8)] : null,
+                      color: isSelected ? Colors.white : Colors.white.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(16),
+                      border: isToday && !isSelected
+                          ? Border.all(color: Colors.white70, width: 1.5)
+                          : null,
+                      boxShadow: isSelected
+                          ? [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.1),
+                                blurRadius: 4,
+                                offset: const Offset(0, 2),
+                              )
+                            ]
+                          : null,
                     ),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
-                          DateFormat('E').format(date),
+                          DateFormat('E').format(date).toUpperCase(),
                           style: TextStyle(
-                            color: isSelected ? Colors.white : Colors.grey[600],
+                            color: isSelected ? Theme.of(context).primaryColor : Colors.white70,
+                            fontSize: 12,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -74,7 +200,7 @@ class _MealCalendarScreenState extends State<MealCalendarScreen> {
                         Text(
                           date.day.toString(),
                           style: TextStyle(
-                            color: isSelected ? Colors.white : Colors.black87,
+                            color: isSelected ? Theme.of(context).primaryColor : Colors.white,
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
                           ),
@@ -86,39 +212,153 @@ class _MealCalendarScreenState extends State<MealCalendarScreen> {
               },
             ),
           ),
+        ],
+      ),
+    );
+  }
 
-          // 2. Meal List
-          Expanded(
-            child: StreamBuilder<List<DailyMealModel>>(
-              stream: _db.streamWeeklyMeals(systemId, dateKeys),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
+  Widget _buildMealCard(
+    BuildContext context,
+    String title,
+    String mealType,
+    Map<String, dynamic>? mealInfo,
+    Map<String, dynamic>? attendanceInfo,
+    IconData icon,
+    Color accentColor,
+    String systemId,
+  ) {
+    final authService = Provider.of<AuthService>(context, listen: false);
+    final userId = authService.userModel?.userId;
 
-                // Find data for selected date
-                final selectedDateStr = DateFormat('yyyy-MM-dd').format(_selectedDate);
-                final dayData = snapshot.data?.firstWhere(
-                  (m) => m.date == selectedDateStr,
-                  orElse: () => DailyMealModel(
-                    date: selectedDateStr, 
-                    breakfast: MealSlot(), 
-                    lunch: MealSlot(), 
-                    dinner: MealSlot()
+    // 1. Extract Cook Info
+    final String? cookName = mealInfo?['cookName'];
+    final String? cookId = mealInfo?['cookId'];
+    // This reads the 'menu' field. We will ensure we write to THIS exact field.
+    final String menu = mealInfo?['menu'] ?? 'Not decided yet';
+    final bool isAssigned = cookId != null;
+    final bool isMe = cookId == userId;
+
+    // 2. Calculate Real Attendee Count
+    int attendeeCount = 0;
+    if (attendanceInfo != null) {
+      attendanceInfo.forEach((key, value) {
+        if (value is Map && value['status'] == AttendanceStatus.yes) {
+          attendeeCount++;
+        }
+      });
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 15,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          // Header Section
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: isAssigned 
+                  ? (isMe ? Colors.yellow[50] : Colors.green[50])
+                  : Colors.grey[50],
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(20),
+                topRight: Radius.circular(20),
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.05),
+                        blurRadius: 4,
+                      )
+                    ],
                   ),
-                );
+                  child: Icon(icon, color: accentColor, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                ),
+                const Spacer(),
+                if (isAssigned)
+                  Chip(
+                    avatar: const Icon(Icons.check_circle, size: 16, color: Colors.white),
+                    label: Text(
+                      isMe ? 'You are cooking' : 'Chef: $cookName',
+                      style: const TextStyle(
+                        color: Colors.white, 
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                    backgroundColor: isMe ? Colors.orange : Colors.green,
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    visualDensity: VisualDensity.compact,
+                    side: BorderSide.none,
+                  )
+                else
+                  Chip(
+                    label: const Text('No Cook Assigned'),
+                    labelStyle: TextStyle(color: Colors.red[700], fontSize: 12),
+                    backgroundColor: Colors.red[50],
+                    visualDensity: VisualDensity.compact,
+                    side: BorderSide.none,
+                  ),
+              ],
+            ),
+          ),
 
-                if (dayData == null) return const Center(child: Text("Error loading data"));
-
-                return ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    _buildMealCard('Breakfast', dayData.breakfast, 'breakfast', systemId),
-                    _buildMealCard('Lunch', dayData.lunch, 'lunch', systemId),
-                    _buildMealCard('Dinner', dayData.dinner, 'dinner', systemId),
-                  ],
-                );
-              },
+          // Content Section
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: [
+                _buildInfoRow(Icons.restaurant_menu, 'Menu', menu),
+                const SizedBox(height: 12),
+                _buildInfoRow(Icons.groups, 'Attendees', '$attendeeCount people eating'),
+                
+                if (!isAssigned || isMe) ...[ // Allow editing if it's me!
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () => _showVolunteerDialog(systemId, mealType, currentMenu: isMe ? menu : null),
+                      icon: Icon(isMe ? Icons.edit : Icons.volunteer_activism, size: 18),
+                      label: Text(isMe ? 'Update Menu' : 'Volunteer to Cook'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Theme.of(context).primaryColor,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        elevation: 0,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
         ],
@@ -126,94 +366,41 @@ class _MealCalendarScreenState extends State<MealCalendarScreen> {
     );
   }
 
-  Widget _buildMealCard(String title, MealSlot slot, String mealType, String systemId) {
-    final authService = Provider.of<AuthService>(context, listen: false);
-    final userId = authService.userModel?.userId;
-    
-    bool isAssigned = slot.cookId != null;
-    bool isMe = slot.cookId == userId;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
+  Widget _buildInfoRow(IconData icon, String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: Colors.grey[400]),
+        const SizedBox(width: 12),
+        Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      title == 'Breakfast' ? Icons.wb_twilight : title == 'Lunch' ? Icons.wb_sunny : Icons.nights_stay,
-                      color: Theme.of(context).primaryColor,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  ],
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: isAssigned ? (isMe ? Colors.yellow[100] : Colors.green[50]) : Colors.red[50],
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    isAssigned ? (isMe ? 'You' : slot.cookName!) : 'No Cook',
-                    style: TextStyle(
-                      color: isAssigned ? (isMe ? Colors.orange[800] : Colors.green[800]) : Colors.red[800],
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const Divider(height: 24),
-            
-            // Details
-            _buildDetailRow(Icons.restaurant_menu, 'Menu', slot.menu ?? 'Not decided'),
-            const SizedBox(height: 8),
-            _buildDetailRow(Icons.group, 'Attendees', '${slot.attendees} people'),
-            
-            const SizedBox(height: 16),
-            
-            // Action Button
-            if (!isAssigned)
-              CustomButton(
-                text: 'Volunteer to Cook',
-                onPressed: () => _showVolunteerDialog(systemId, mealType),
-                height: 40,
-                isOutlined: true,
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey[600],
+                fontWeight: FontWeight.w500,
               ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              value,
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: Colors.black87,
+              ),
+            ),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDetailRow(IconData icon, String label, String value) {
-    return Row(
-      children: [
-        Icon(icon, size: 16, color: Colors.grey[400]),
-        const SizedBox(width: 8),
-        Text('$label: ', style: TextStyle(color: Colors.grey[600], fontSize: 14)),
-        Expanded(
-          child: Text(value, style: const TextStyle(fontWeight: FontWeight.w500)),
         ),
       ],
     );
   }
 
-  Future<void> _showVolunteerDialog(String systemId, String mealType) async {
-    final menuController = TextEditingController();
+  // UPDATED: DIRECT FIREBASE WRITE TO FIX UPDATE ISSUE
+  Future<void> _showVolunteerDialog(String systemId, String mealType, {String? currentMenu}) async {
+    final menuController = TextEditingController(text: currentMenu == 'Not decided yet' ? '' : currentMenu);
     final authService = Provider.of<AuthService>(context, listen: false);
     final user = authService.userModel!;
     final dateStr = DateFormat('yyyy-MM-dd').format(_selectedDate);
@@ -221,35 +408,63 @@ class _MealCalendarScreenState extends State<MealCalendarScreen> {
     await showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Volunteer for $mealType'),
+        title: Text(currentMenu == null ? 'Volunteer for $mealType' : 'Update Menu'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("What are you planning to cook?"),
-            const SizedBox(height: 10),
+            Text(
+              "What are you planning to cook?",
+              style: TextStyle(color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 12),
             TextField(
               controller: menuController,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 hintText: "e.g., Chicken Curry & Rice",
-                border: OutlineInputBorder(),
+                filled: true,
+                fillColor: Colors.grey[50],
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
               ),
             ),
           ],
         ),
+        actionsPadding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel"),
+          ),
           ElevatedButton(
             onPressed: () async {
               Navigator.pop(context);
-              await _db.volunteerToCook(
-                systemId: systemId,
-                date: dateStr,
-                mealType: mealType,
-                cookId: user.userId,
-                cookName: user.name,
-                menu: menuController.text.isEmpty ? 'TBD' : menuController.text,
-              );
+              final menuText = menuController.text.isEmpty ? 'TBD' : menuController.text;
+
+              // DIRECT WRITE: Ensures the menu updates instantly
+              await FirebaseFirestore.instance
+                  .collection('mealCalendar')
+                  .doc(systemId)
+                  .collection('days')
+                  .doc(dateStr)
+                  .set({
+                    mealType: {
+                      'cookId': user.userId,
+                      'cookName': user.name,
+                      'menu': menuText, // This updates the field UI is reading
+                    }
+                  }, SetOptions(merge: true));
             },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(context).primaryColor,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
             child: const Text("Confirm"),
           ),
         ],
