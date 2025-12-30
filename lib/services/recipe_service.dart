@@ -4,7 +4,7 @@ import 'dart:convert';
 import '../models/recipe_model.dart';
 
 class RecipeService extends ChangeNotifier {
-  static const String _apiKey = 'ba5455380a95424f98f3c6ab3f4d80d2';
+  static const String _apiKey = 'e391a902f58c42c0a3c757e407d4a8a5';
   static const String _baseUrl = 'https://api.spoonacular.com/recipes';
 
   bool _isLoading = false;
